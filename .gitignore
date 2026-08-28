@@ -1,0 +1,91 @@
+﻿# ============================================
+# WATSONX HACKATHON - SECURITY .GITIGNORE
+# ============================================
+# DO NOT REMOVE OR MODIFY SECURITY PATTERNS
+# ============================================
+
+# AI ASSISTANT SESSION FILES (CRITICAL)
+.copilot/
+.cursor/
+.codeium/
+
+# CREDENTIALS AND SECRETS (CRITICAL)
+.env
+.env.*
+!.env.example
+*.env
+env.local
+.env.local
+.env.*.local
+ibmcloud-credentials.json
+ibm-credentials.env
+*-credentials.json
+*apikey*
+*api-key*
+*api_key*
+config.json
+config.yaml
+config.yml
+secrets.json
+secrets.yaml
+secrets.yml
+credentials.json
+credentials.yaml
+*.pem
+*.key
+*.p12
+*.pfx
+*.cer
+*.crt
+id_rsa
+id_dsa
+*.ppk
+*credentials*
+*secret*
+*password*
+*token*
+database.yml
+database.json
+db-config.*
+
+# DEVELOPMENT FILES
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+__pycache__/
+*.py[cod]
+*.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+*.class
+*.jar
+*.war
+target/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+dist/
+build/
+*.log
+*.bak
+*.tmp
+*.temp
+.backup/
+
+# ============================================
+# FileDrive project-specific
+# ============================================
+backend/data/
+backend/local_storage/
+ibm-hackathon-template-main/
+*.docx
+.pytest_cache/
+backend/.pytest_cache/

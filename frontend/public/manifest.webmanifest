@@ -1,0 +1,17 @@
+{
+  "name": "FileDrive",
+  "short_name": "FileDrive",
+  "description": "Unified ECM drive — FileNet, Google Drive, S3, Azure and more",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1a56db",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
