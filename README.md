@@ -162,17 +162,6 @@ When asked for a production-readiness audit, Bob gave an honest, non-inflated as
 
 ---
 
-## Why C-ECM Scores on Every Judging Criterion
-
-| Criterion (5 pts each) | How C-ECM addresses it |
-|---|---|
-| **Completeness & Feasibility** | Not a mockup. 217 automated tests, a running FastAPI + React app, 11 working storage adapters, approval workflows with state-machine enforcement, and an audit trail capturing 20+ distinct event types end-to-end. |
-| **Creativity & Innovation** | Most ECM tools solve fragmentation by forcing a migration into their silo. C-ECM inverts that: one governance, approval, and audit layer *over* whatever storage already exists — including IBM Z mainframe and IBM i systems that no consumer-grade SaaS tool touches at all. |
-| **Design & Usability** | One unified document viewer, one global search bar across every backend, a 360° audit dashboard built for someone who has 5 minutes before a compliance meeting, and a mobile-responsive PWA usable from a phone during an on-call incident. |
-| **Effectiveness & Efficiency** | Directly cuts the two most expensive parts of the release/maintenance paperwork tax: cross-system search time during an incident and approval-trail reconstruction during a compliance audit — both measurable in hours saved per cycle. Parallel global search is already bounded by the slowest connection, not summed. |
-
----
-
 ## Tech Stack
 
 | Layer | Technology |
@@ -301,21 +290,6 @@ cd backend
 # Expected: 217 passed
 # (2 pre-existing failures possible only in sandboxes with no outbound DNS — unrelated to app logic)
 ```
-
----
-
-## Submission Checklist — IBM TechXchange 2026 Pre-conference Dev Day Hackathon
-
-Deadline: **10:00 AM ET, August 30, 2026** — submit from the *My Team* page.
-
-- [ ] **Video demo** (≤ 3 minutes, publicly accessible URL — YouTube / Vimeo / Google Drive get automated AI feedback)
-  - First ~30–60 s: the problem (scattered release/maintenance paperwork, no unified audit trail, five systems that don't talk)
-  - **≥ 90 seconds live on screen**: open a document across two different backends from one global search bar; walk an approval through a workflow; pull the Audit/Reports dashboard; show the AI document intelligence panel
-  - Narrate clearly where and how IBM Bob was used to build it
-- [ ] **Written problem & solution statement** (≤ 500 words) — problem, target users, how they interact, and why the no-migration multi-backend governance approach is differentiated. Draw from *The Problem* and *Who This Is For* sections above.
-- [ ] **Written statement on how IBM Bob was used** — draw from the *Built with IBM Bob 2.0* section above; be specific about Agent mode, parallel subagents, and document understanding, not just "AI helped write code."
-- [ ] **Code repository** — this repo, made publicly accessible, with each team member's exported IBM Bob task-session summary screenshots added under `docs/bob-sessions/`.
-- [ ] Confirm no IBM Cloud credentials, API keys, or secrets are committed anywhere (`.gitignore` / `.bobignore` are already configured).
 
 ---
 
