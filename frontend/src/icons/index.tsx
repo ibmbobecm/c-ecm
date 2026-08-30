@@ -186,6 +186,18 @@ const UI_ICONS: Record<string, (p: IconProps) => ReactElement> = {
       <path d="M10 14v3" />
     </Stroke>
   ),
+  "bar-chart": (p) => (
+    <Stroke {...p}>
+      <path d="M4 16.5V11M10 16.5V4.5M16 16.5v-8" />
+      <path d="M2.5 16.5h15" strokeOpacity="0.5" />
+    </Stroke>
+  ),
+  settings: (p) => (
+    <Stroke {...p} strokeLinejoin="round">
+      <path d="M10 1.6 12.37 4.27 15.94 4.06 15.73 7.63 18.4 10 15.73 12.37 15.94 15.94 12.37 15.73 10 18.4 7.63 15.73 4.06 15.94 4.27 12.37 1.6 10 4.27 7.63 4.06 4.06 7.63 4.27Z" />
+      <circle cx="10" cy="10" r="2.6" />
+    </Stroke>
+  ),
   bell: (p) => (
     <Stroke {...p}>
       <path d="M10 3.3c-2.3 0-4.1 1.9-4.1 4.1v2.4c0 .5-.2 1-.5 1.4l-1 1.2c-.5.6-.1 1.5.7 1.5h9.8c.8 0 1.2-.9.7-1.5l-1-1.2c-.3-.4-.5-.9-.5-1.4V7.4c0-2.3-1.8-4.1-4.1-4.1Z" />
@@ -233,6 +245,13 @@ const UI_ICONS: Record<string, (p: IconProps) => ReactElement> = {
       <path d="M7.5 9V6.8a2.5 2.5 0 0 1 5 0v0" strokeDasharray="3 2" />
     </Stroke>
   ),
+  info: (p) => (
+    <Stroke {...p}>
+      <circle cx="10" cy="10" r="7.2" />
+      <path d="M10 9.2v4.3" />
+      <circle cx="10" cy="6.7" r="0.9" fill="currentColor" stroke="none" />
+    </Stroke>
+  ),
   eye: (p) => (
     <Stroke {...p}>
       <path d="M2.5 10S5.5 4.5 10 4.5 17.5 10 17.5 10 14.5 15.5 10 15.5 2.5 10 2.5 10Z" />
@@ -250,6 +269,15 @@ const UI_ICONS: Record<string, (p: IconProps) => ReactElement> = {
     <Stroke {...p}>
       <circle cx="10" cy="10" r="7.5" />
       <path d="M7 10.3l2.3 2.3L13.5 8" />
+    </Stroke>
+  ),
+  workflow: (p) => (
+    <Stroke {...p}>
+      <rect x="3" y="4" width="5" height="4" rx="1" />
+      <rect x="12" y="4" width="5" height="4" rx="1" />
+      <rect x="7.5" y="13" width="5" height="4" rx="1" />
+      <path d="M5.5 8v2.5a2 2 0 0 0 2 2h5a2 2 0 0 0 2-2V8" />
+      <path d="M10 10.5V13" />
     </Stroke>
   ),
 };
@@ -403,6 +431,8 @@ const PROVIDER_COLOR: Record<string, string> = {
   aws_s3: "#E8710A",
   ibm_cos: "#054ADA",
   azure_blob: "#00A2E8",
+  ibm_i: "#0f62fe",
+  ibm_z: "#198038",
 };
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -415,6 +445,8 @@ const PROVIDER_LABEL: Record<string, string> = {
   aws_s3: "S3",
   ibm_cos: "COS",
   azure_blob: "AZ",
+  ibm_i: "i",
+  ibm_z: "Z",
 };
 
 export function ProviderBadge({ providerKey, size = 20 }: { providerKey: string; size?: number }) {

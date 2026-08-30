@@ -4,6 +4,7 @@ import { Icon, ProviderBadge } from "../icons";
 import { useTheme } from "../hooks/useTheme";
 import { useAuth } from "../contexts/AuthContext";
 import { NotificationsBell } from "./NotificationsBell";
+import { AdminMenu } from "./AdminMenu";
 
 export function Sidebar({
   view,
@@ -11,11 +12,12 @@ export function Sidebar({
   onNewFolder,
   onUploadClick,
   uploading,
-  onManageConnections,
+  onOpenIntegrations,
   onOpenUsers,
   onOpenDocClasses,
   onOpenWebhooks,
   onOpenRetention,
+  onOpenAuditLog,
   onLogout,
 }: {
   view: ViewMode;
@@ -23,17 +25,17 @@ export function Sidebar({
   onNewFolder: () => void;
   onUploadClick: () => void;
   uploading: boolean;
-  onManageConnections: () => void;
+  onOpenIntegrations: () => void;
   onOpenUsers: () => void;
   onOpenDocClasses: () => void;
   onOpenWebhooks: () => void;
   onOpenRetention: () => void;
+  onOpenAuditLog: () => void;
   onLogout: () => void;
 }) {
   const { connections, activeConnectionId, selectConnection } = useConnections();
   const { pref, cycle } = useTheme();
   const { user, hasRole } = useAuth();
-  const activeConnection = connections.find((c) => c.id === activeConnectionId) ?? null;
   const isAdmin = hasRole("admin");
 
   const displayName = user?.display_name || user?.username || "User";
@@ -44,30 +46,27 @@ export function Sidebar({
         <span className="sidebar-logo">
           <Icon name="folder" size={22} />
         </span>
-        <span className="sidebar-brand-name">FileDrive</span>
+        <span className="sidebar-brand-name">C-ECM</span>
         <NotificationsBell />
       </div>
 
-      <div className="connection-switcher">
-        <div className="connection-switcher-select">
-          {activeConnection && <ProviderBadge providerKey={activeConnection.provider_key} size={18} />}
-          <select
-            value={activeConnectionId ?? ""}
-            onChange={(e) => selectConnection(e.target.value || null)}
-            disabled={connections.length === 0}
+      <nav className="sidebar-nav sidebar-connections-nav">
+        <div className="sidebar-section-label">Connections</div>
+        {connections.length === 0 && <p className="muted sidebar-connections-empty">No connections yet.</p>}
+        {connections.map((c) => (
+          <button
+            key={c.id}
+            className={c.id === activeConnectionId ? "active" : ""}
+            onClick={() => {
+              selectConnection(c.id);
+              onViewChange("mine");
+            }}
           >
-            {connections.length === 0 && <option value="">No connections</option>}
-            {connections.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.display_name}
-              </option>
-            ))}
-          </select>
-        </div>
-        <button className="link-btn connection-manage-btn" onClick={onManageConnections}>
-          Manage
-        </button>
-      </div>
+            <ProviderBadge providerKey={c.provider_key} size={17} />
+            {c.display_name}
+          </button>
+        ))}
+      </nav>
 
       <div className="sidebar-new">
         <button className="new-menu-btn" onClick={onNewFolder} disabled={!activeConnectionId}>
@@ -81,10 +80,6 @@ export function Sidebar({
       </div>
 
       <nav className="sidebar-nav">
-        <button className={view === "mine" ? "active" : ""} onClick={() => onViewChange("mine")}>
-          <Icon name="folder" size={17} />
-          My Drive
-        </button>
         <button className={view === "trash" ? "active" : ""} onClick={() => onViewChange("trash")}>
           <Icon name="trash" size={17} />
           Trash
@@ -99,39 +94,29 @@ export function Sidebar({
         </button>
       </nav>
 
-      {isAdmin && (
-        <nav className="sidebar-nav sidebar-admin-nav">
-          <div className="sidebar-section-label">Admin</div>
-          <button onClick={onOpenUsers}>
-            <Icon name="eye" size={17} />
-            Users
-          </button>
-          <button onClick={onOpenDocClasses}>
-            <Icon name="tag" size={17} />
-            Doc Classes
-          </button>
-          <button onClick={onOpenWebhooks}>
-            <Icon name="link" size={17} />
-            Webhooks
-          </button>
-          <button onClick={onOpenRetention}>
-            <Icon name="lock" size={17} />
-            Retention
-          </button>
-        </nav>
-      )}
-
       <div className="sidebar-footer">
         <div className="sidebar-user-row">
           <span className="sidebar-user" title={user?.email || user?.username}>{displayName}</span>
-          <button
-            className="theme-toggle"
-            onClick={cycle}
-            aria-label={`Theme: ${pref}. Click to change.`}
-            title={`Theme: ${pref}`}
-          >
-            <Icon name={pref === "dark" ? "moon" : pref === "light" ? "sun" : "monitor"} size={16} />
-          </button>
+          <div className="sidebar-user-actions">
+            {isAdmin && (
+              <AdminMenu
+                onOpenIntegrations={onOpenIntegrations}
+                onOpenUsers={onOpenUsers}
+                onOpenDocClasses={onOpenDocClasses}
+                onOpenWebhooks={onOpenWebhooks}
+                onOpenRetention={onOpenRetention}
+                onOpenAuditLog={onOpenAuditLog}
+              />
+            )}
+            <button
+              className="theme-toggle"
+              onClick={cycle}
+              aria-label={`Theme: ${pref}. Click to change.`}
+              title={`Theme: ${pref}`}
+            >
+              <Icon name={pref === "dark" ? "moon" : pref === "light" ? "sun" : "monitor"} size={16} />
+            </button>
+          </div>
         </div>
         <button className="sidebar-logout" onClick={onLogout}>
           <Icon name="logout" size={15} />

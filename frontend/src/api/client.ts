@@ -1,4 +1,8 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://127.0.0.1:8020";
+// Defaults to whatever hostname/IP the page itself was loaded from, so this
+// works both from localhost and from another device hitting this machine's
+// LAN IP or hostname -- a hardcoded "127.0.0.1" would resolve to the
+// *client's own* machine in that second case, not this server.
+const API_BASE = import.meta.env.VITE_API_BASE ?? `http://${window.location.hostname}:8020`;
 
 export class ApiError extends Error {
   status: number;
@@ -76,11 +80,19 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
-export async function apiGet<T>(path: string, params?: Record<string, string | number | undefined>): Promise<T> {
+export async function apiGet<T>(path: string, params?: Record<string, string | number | string[] | undefined>): Promise<T> {
   const url = new URL(API_BASE + path);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined) url.searchParams.set(k, String(v));
+      if (v === undefined) continue;
+      // Repeated query params (?k=a&k=b), not one comma-joined value — matches
+      // how FastAPI's `list[str] = Query(...)` parses multi-value filters
+      // (e.g. the audit log's event-type filter).
+      if (Array.isArray(v)) {
+        for (const item of v) url.searchParams.append(k, item);
+      } else {
+        url.searchParams.set(k, String(v));
+      }
     }
   }
   const res = await fetch(url, { headers: authHeaders() });

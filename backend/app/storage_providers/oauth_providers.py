@@ -9,7 +9,7 @@ to) and run the actual OAuth flow before trusting these the way FileNet's
 and local disk's providers are trusted.
 
 Unlike a FileNet server or an Alfresco URL, the OAuth client id/secret is
-NOT per-connection — it's the one app this whole FileDrive deployment
+NOT per-connection — it's the one app this whole C-ECM deployment
 registers with Google/Microsoft/Box, shared by every connection to that
 provider (the same way one Slack or Zapier install has a single registered
 Google app that all its users consent through). `configured` reflects
@@ -17,7 +17,7 @@ whether an admin has set that up; end users never see or enter it — they
 just click Connect.
 
 All three follow the same shape: `_root_id()` lazily creates/finds a
-"FileDrive" folder so this app never touches the rest of the user's real
+"C-ECM" folder so this app never touches the rest of the user's real
 drive, ids are the platform's own opaque node/item ids, and `creds` holds
 {"access_token", "refresh_token", "expires_at", "identity"} — refreshed
 transparently via `refresh_if_needed()`. The root-id cache is keyed by
@@ -52,7 +52,7 @@ from .base import (
     VersionInfo,
 )
 
-_APP_ROOT_NAME = "FileDrive"
+_APP_ROOT_NAME = "C-ECM"
 
 
 class _OAuthProviderBase(StorageProvider):
@@ -104,7 +104,7 @@ class GoogleDriveProvider(_OAuthProviderBase):
             "client_id": client_id,
             "redirect_uri": redirect_uri,
             "response_type": "code",
-            # drive.file, not the full "drive" scope — FileDrive only ever
+            # drive.file, not the full "drive" scope — C-ECM only ever
             # touches the one folder it creates for itself, and drive.file
             # (files/folders this app created, or the user explicitly picked)
             # covers that. It matters beyond scope-minimalism: Google
@@ -177,21 +177,21 @@ class GoogleDriveProvider(_OAuthProviderBase):
         # newly-connected account (a page load fires parallel calls for
         # listing/tags/activity/notifications right after connecting) would
         # each see an empty cache, each find no existing folder, and each
-        # create their own duplicate "FileDrive" root in the real account.
+        # create their own duplicate "C-ECM" root in the real account.
         # Double-checked locking: re-test the cache after acquiring the
         # lock, since another thread may have populated it while we waited.
         with self._root_id_lock:
             cached = self._root_id_cache.get(cache_key)
             if cached:
                 return cached
-            q = "name='FileDrive' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false"
+            q = "name='C-ECM' and mimeType='application/vnd.google-apps.folder' and 'root' in parents and trashed=false"
             found = self._call(creds, "GET", "https://www.googleapis.com/drive/v3/files", params={"q": q}).json()
             files = found.get("files", [])
             if files:
                 self._root_id_cache[cache_key] = files[0]["id"]
                 return files[0]["id"]
             created = self._call(creds, "POST", "https://www.googleapis.com/drive/v3/files", json={
-                "name": "FileDrive", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"],
+                "name": "C-ECM", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"],
             }).json()
             self._root_id_cache[cache_key] = created["id"]
             return created["id"]

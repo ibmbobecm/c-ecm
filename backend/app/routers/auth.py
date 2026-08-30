@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from .. import auth as auth_module
-from ..auth import CurrentUser, get_current_user
+from ..auth import CurrentUser, get_app_session, get_current_user
 from ..schemas import AppLoginRequest, TokenResponse, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -23,6 +23,11 @@ def login(req: AppLoginRequest):
             last_login_at=user.get("last_login_at"),
         ),
     )
+
+
+@router.post("/logout", status_code=204)
+def logout(current_user: CurrentUser = Depends(get_current_user), session_id: str = Depends(get_app_session)):
+    auth_module.app_logout(session_id, current_user["username"])
 
 
 @router.get("/me", response_model=UserOut)

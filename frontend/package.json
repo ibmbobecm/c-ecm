@@ -10,8 +10,10 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "mammoth": "^1.12.2",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-latest/xlsx-latest.tgz"
   },
   "devDependencies": {
     "@types/node": "^24.13.3",

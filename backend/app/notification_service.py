@@ -7,7 +7,7 @@ team member sees relevant activity.  The `owner` column on each notification
 already exists, so no schema change is needed.
 """
 
-from . import notifications_store, users_store
+from . import connections_store, notifications_store, users_store
 
 _NOTIFIABLE_EVENT_TYPES = {
     "created",
@@ -21,8 +21,10 @@ _NOTIFIABLE_EVENT_TYPES = {
     "checked_out",
     "checked_in",
     "workflow_started",
+    "workflow_step_advanced",
     "workflow_approved",
     "workflow_rejected",
+    "workflow_cancelled",
     "legal_hold_set",
     "legal_hold_released",
 }
@@ -39,8 +41,10 @@ _MESSAGE_TEMPLATES = {
     "checked_out": '{actor} checked out "{name}"',
     "checked_in": '{actor} checked in "{name}"',
     "workflow_started": '{actor} requested approval for "{name}"',
-    "workflow_approved": '{actor} approved "{name}"',
+    "workflow_step_advanced": '{actor}\'s approval moved "{name}" to the next review step',
+    "workflow_approved": '{actor}\'s approval completed the workflow for "{name}"',
     "workflow_rejected": '{actor} rejected "{name}"',
+    "workflow_cancelled": '{actor} cancelled the approval request for "{name}"',
     "legal_hold_set": 'Legal hold placed on "{name}"',
     "legal_hold_released": 'Legal hold released on "{name}"',
 }
@@ -48,7 +52,13 @@ _MESSAGE_TEMPLATES = {
 
 def _format_message(event: dict) -> str:
     template = _MESSAGE_TEMPLATES.get(event["event_type"], '{actor} updated "{name}"')
-    return template.format(actor=event["actor"], name=event["resource_name"] or "an item")
+    message = template.format(actor=event["actor"], name=event["resource_name"] or "an item")
+    connection_id = event.get("connection_id")
+    if connection_id:
+        connection = connections_store.get_connection(connection_id)
+        if connection:
+            message += f" ({connection['display_name']})"
+    return message
 
 
 def on_event(event: dict) -> None:

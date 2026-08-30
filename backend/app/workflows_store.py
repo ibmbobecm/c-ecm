@@ -31,6 +31,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
     return conn
 
 
@@ -336,6 +337,47 @@ def act_on_step(instance_id: str, reviewer: str, action: str, comment: str | Non
         conn.commit()
         row = conn.execute("SELECT * FROM workflow_instances WHERE id = ?", (instance_id,)).fetchone()
         return _inst_row(conn, row)
+    finally:
+        conn.close()
+
+
+def delete_for_resource(connection_id: str, resource_id: str) -> None:
+    """Called when a single file/folder is permanently deleted — mirrors
+    tags_store/comments_store/etc.'s delete_for_resource. Without this, a
+    permanently-deleted resource's workflow instances (including ones still
+    in_review) linger forever: invisible to everyone since nothing can list
+    instances for a resource that no longer exists, but never cleaned up
+    either — reviewing/approving a document that's gone is meaningless, and
+    those rows would otherwise never leave the database."""
+    conn = _conn()
+    try:
+        conn.execute(
+            "DELETE FROM workflow_step_actions WHERE instance_id IN "
+            "(SELECT id FROM workflow_instances WHERE connection_id = ? AND resource_id = ?)",
+            (connection_id, resource_id),
+        )
+        conn.execute(
+            "DELETE FROM workflow_instances WHERE connection_id = ? AND resource_id = ?", (connection_id, resource_id)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def delete_for_connection(connection_id: str) -> None:
+    """Called when a connection is removed — same orphaning concern as
+    delete_for_resource, scoped to every instance that connection ever
+    created. Workflow *definitions* are global (shared across connections,
+    like tag definitions), so only instances are removed here."""
+    conn = _conn()
+    try:
+        conn.execute(
+            "DELETE FROM workflow_step_actions WHERE instance_id IN "
+            "(SELECT id FROM workflow_instances WHERE connection_id = ?)",
+            (connection_id,),
+        )
+        conn.execute("DELETE FROM workflow_instances WHERE connection_id = ?", (connection_id,))
+        conn.commit()
     finally:
         conn.close()
 

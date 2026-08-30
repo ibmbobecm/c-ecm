@@ -2,7 +2,7 @@
 StorageProvider interface as every other provider.
 
 No real remote identity to check — it's just a folder on this machine, and
-you already logged into FileDrive itself — so `requires_credentials =
+you already logged into C-ECM itself — so `requires_credentials =
 False` and the only thing each connection configures is *where* (a folder
 path, defaulting to this app's own data directory if left blank). Different
 connections can point at entirely different folders, each getting its own
@@ -99,6 +99,7 @@ class LocalDiskProvider(StorageProvider):
         conn = sqlite3.connect(str(storage_dir / "filedrive.db"))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_SCHEMA)
         return conn

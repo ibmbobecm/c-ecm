@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 
-from .. import settings_store
+from .. import ai_service, settings_store
 from ..auth import CurrentUser, require_role
 from ..config import (
     BOX_CLIENT_ID,
@@ -11,11 +11,21 @@ from ..config import (
     DOCUSIGN_PRIVATE_KEY,
     DOCUSIGN_USER_ID,
     DOCUSIGN_WEBHOOK_HMAC_KEY,
+    FD_AI_BACKEND_DEFAULT,
     GOOGLE_CLIENT_ID,
     GOOGLE_CLIENT_SECRET,
+    IBM_CLOUD_API_KEY,
     MS_CLIENT_ID,
     MS_CLIENT_SECRET,
     MS_TENANT,
+    WATSON_DISCO_APIKEY,
+    WATSON_DISCO_PROJECT_ID,
+    WATSON_DISCO_URL,
+    WATSON_NLU_APIKEY,
+    WATSON_NLU_URL,
+    WATSONX_MODEL,
+    WATSONX_PROJECT_ID,
+    WATSONX_URL,
 )
 from ..schemas import AdminSettingsOut, AdminSettingsUpdate
 
@@ -35,6 +45,16 @@ _KEYS_WITH_DEFAULTS = {
     "docusign_private_key": DOCUSIGN_PRIVATE_KEY,
     "docusign_environment": DOCUSIGN_ENVIRONMENT,
     "docusign_webhook_hmac_key": DOCUSIGN_WEBHOOK_HMAC_KEY,
+    "ai_backend": FD_AI_BACKEND_DEFAULT,
+    "ibm_cloud_api_key": IBM_CLOUD_API_KEY,
+    "watsonx_project_id": WATSONX_PROJECT_ID,
+    "watsonx_url": WATSONX_URL,
+    "watsonx_model": WATSONX_MODEL,
+    "watson_nlu_url": WATSON_NLU_URL,
+    "watson_nlu_apikey": WATSON_NLU_APIKEY,
+    "watson_disco_url": WATSON_DISCO_URL,
+    "watson_disco_apikey": WATSON_DISCO_APIKEY,
+    "watson_disco_project_id": WATSON_DISCO_PROJECT_ID,
 }
 
 _admin = require_role("admin")
@@ -61,6 +81,21 @@ def get_settings(_user: CurrentUser = Depends(_admin)):
             values["docusign_integration_key"] and values["docusign_user_id"]
             and values["docusign_account_id"] and values["docusign_private_key"]
         ),
+        ai_backend=values["ai_backend"] or "none",
+        ibm_cloud_api_key_set=bool(values["ibm_cloud_api_key"]),
+        watsonx_project_id=values["watsonx_project_id"],
+        watsonx_url=values["watsonx_url"],
+        watsonx_model=values["watsonx_model"],
+        watsonx_configured=bool(values["ibm_cloud_api_key"] and values["watsonx_project_id"]),
+        watson_nlu_url=values["watson_nlu_url"],
+        watson_nlu_apikey_set=bool(values["watson_nlu_apikey"]),
+        watson_nlu_configured=bool(values["watson_nlu_url"] and values["watson_nlu_apikey"]),
+        watson_disco_url=values["watson_disco_url"],
+        watson_disco_apikey_set=bool(values["watson_disco_apikey"]),
+        watson_disco_project_id=values["watson_disco_project_id"],
+        watson_disco_configured=bool(
+            values["watson_disco_url"] and values["watson_disco_apikey"] and values["watson_disco_project_id"]
+        ),
     )
 
 
@@ -72,4 +107,7 @@ def update_settings(req: AdminSettingsUpdate, _user: CurrentUser = Depends(_admi
         value = getattr(req, key, None)
         if value:
             settings_store.set_setting(key, value)
+    # Picks up any AI/Watson keys just saved above immediately, instead of
+    # only on the next server restart.
+    ai_service.refresh_from_settings()
     return get_settings()

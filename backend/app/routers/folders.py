@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import activity_service, comments_store, metadata_store, share_links_store, tags_store
+from .. import activity_service, comments_store, metadata_store, share_links_store, tags_store, workflows_store
 from ..access_helpers import to_http
 from ..auth import CurrentSession, get_current_session
 from ..schemas import FolderContentsOut, FolderCreateRequest, FolderOut, FolderUpdateRequest
@@ -62,6 +62,7 @@ def _cleanup_local_data(session: CurrentSession, resource_id: str, resource_type
     comments_store.delete_for_resource(session.connection_id, resource_id)
     share_links_store.delete_for_resource(session.connection_id, resource_id)
     metadata_store.delete_for_resource(session.connection_id, resource_id)
+    workflows_store.delete_for_resource(session.connection_id, resource_id)
 
 
 def _actor(session: CurrentSession) -> str:

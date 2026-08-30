@@ -1,4 +1,4 @@
-"""The provider abstraction that makes FileDrive's UI backend-agnostic.
+"""The provider abstraction that makes C-ECM's UI backend-agnostic.
 
 Every storage system (FileNet, local disk, Alfresco, Google Drive, Microsoft
 365, Box, ...) implements `StorageProvider`. Routers never talk to a specific
@@ -133,7 +133,7 @@ class StorageProvider(ABC):
     @property
     def configured(self) -> bool:
         """False when required *admin-level* setup (an OAuth app's client
-        id/secret, registered once for this whole FileDrive deployment)
+        id/secret, registered once for this whole C-ECM deployment)
         hasn't been supplied yet. Providers whose configuration is entirely
         per-connection (FileNet's server URL, Alfresco's base URL) don't
         need this — every connection carries its own, so there's nothing
@@ -152,7 +152,7 @@ class StorageProvider(ABC):
     requires_credentials: bool = True
     """False for a provider with no real remote identity to check (local
     disk — it's just a folder on this machine; you already logged into
-    FileDrive itself). The frontend hides the username/password fields
+    C-ECM itself). The frontend hides the username/password fields
     entirely rather than asking for a meaningless login."""
 
     credential_labels: tuple[str, str] = ("Username", "Password")
@@ -273,11 +273,11 @@ class StorageProvider(ABC):
         raise ProviderError("Permissions listing isn't supported by this connection yet", status_code=501)
 
     # --- sharing (default works for every provider out of the box — see
-    # share_links_store.py — because it's FileDrive's own token registry
+    # share_links_store.py — because it's C-ECM's own token registry
     # plus the read methods every provider already implements, not
     # anything backend-specific. A provider only overrides these when it
     # has genuinely better native sharing to offer (a real, backend-hosted
-    # URL instead of one FileDrive has to broker) — none do yet, so the
+    # URL instead of one C-ECM has to broker) — none do yet, so the
     # base implementation is what actually runs today for all nine.) ---
     supports_share_links: bool = True
 

@@ -1,6 +1,6 @@
 """Unit tests for esignature_service — the DocuSign HTTP integration
 layer. DocuSign's own API is mocked (there's no live account in this
-environment); what's under test is FileDrive's side of the contract: JWT
+environment); what's under test is C-ECM's side of the contract: JWT
 construction, token caching, request/response shape, and webhook HMAC
 verification.
 """

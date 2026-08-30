@@ -41,6 +41,19 @@ export type AdminSettings = {
   docusign_environment: string;
   docusign_webhook_hmac_key_set: boolean;
   docusign_configured: boolean;
+  ai_backend: string;
+  ibm_cloud_api_key_set: boolean;
+  watsonx_project_id: string;
+  watsonx_url: string;
+  watsonx_model: string;
+  watsonx_configured: boolean;
+  watson_nlu_url: string;
+  watson_nlu_apikey_set: boolean;
+  watson_nlu_configured: boolean;
+  watson_disco_url: string;
+  watson_disco_apikey_set: boolean;
+  watson_disco_project_id: string;
+  watson_disco_configured: boolean;
 };
 
 export type ESignatureSigner = {
@@ -200,6 +213,28 @@ export type ActivityEvent = {
   actor: string;
   payload: Record<string, unknown>;
   created_at: string;
+};
+
+export type ActivityTypeCount = { event_type: string; count: number };
+export type ActivityActorCount = { actor: string; count: number };
+export type ActivityDayCount = { day: string; count: number };
+export type ActivityAlert = {
+  severity: "warning" | "danger";
+  title: string;
+  detail: string;
+  actor: string;
+  event_type: string;
+  count: number;
+  window_start: string;
+  window_end: string;
+};
+export type ActivitySummary = {
+  total_events: number;
+  unique_actors: number;
+  by_type: ActivityTypeCount[];
+  by_actor: ActivityActorCount[];
+  by_day: ActivityDayCount[];
+  alerts: ActivityAlert[];
 };
 
 // --- locks -----------------------------------------------------------------

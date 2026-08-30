@@ -9,19 +9,18 @@ export function formatBytes(bytes: number | null): string {
 
 export function formatDate(iso: string | null): string {
   if (!iso) return "";
-  const d = new Date(iso.endsWith("Z") ? iso : iso + "Z");
+  // Backend timestamps are already offset-aware (e.g. "...+00:00"); only
+  // naive strings (no "Z" and no "+HH:MM"/"-HH:MM" suffix) need "Z" added.
+  // Blindly appending "Z" to an already-offset string (old bug) produces
+  // "...+00:00Z", which Date can't parse and silently yields Invalid Date.
+  const hasTz = /(Z|[+-]\d{2}:\d{2})$/.test(iso);
+  const d = new Date(hasTz ? iso : iso + "Z");
   const now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
   if (sameDay) {
     return d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
   }
   return d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
-
-export function fileKind(contentType: string | null, name: string): "image" | "pdf" | "other" {
-  if (contentType?.startsWith("image/")) return "image";
-  if (contentType === "application/pdf" || name.toLowerCase().endsWith(".pdf")) return "pdf";
-  return "other";
 }
 
 export function keyOf(item: { type: string; id: string }): string {

@@ -1,6 +1,6 @@
 """Outbound webhook registry and dispatcher.
 
-Webhooks give downstream systems real-time awareness of FileDrive events
+Webhooks give downstream systems real-time awareness of C-ECM events
 without polling.  Every event that passes through activity_service is
 offered to registered webhooks.  Delivery is attempted synchronously
 (in a background thread so it doesn't block the request) with simple
@@ -67,6 +67,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
     return conn
 
 
@@ -203,8 +204,8 @@ def _deliver_one(webhook: dict, event: dict) -> None:
     signature = _sign(webhook["secret"], payload)
     headers = {
         "Content-Type": "application/json",
-        "X-FileDrive-Signature": signature,
-        "X-FileDrive-Event": event.get("event_type", ""),
+        "X-C-ECM-Signature": signature,
+        "X-C-ECM-Event": event.get("event_type", ""),
     }
     last_code: int | None = None
     last_error: str | None = None

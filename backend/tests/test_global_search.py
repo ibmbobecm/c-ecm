@@ -24,15 +24,20 @@ def test_global_search_with_connection(client: TestClient, auth_headers, conn_he
     assert resp.status_code == 200
     body = resp.json()
     assert body["query"] == "hello"
-    # Result is structurally valid — hits is a list (may be empty depending
-    # on provider search implementation) and there are no unexpected keys.
+    # Regression: GlobalSearchHit.updated_at was typed `str`, but providers
+    # return a real datetime for a file's updated_at. Pydantic v2 doesn't
+    # coerce datetime -> str, so every file hit with a timestamp raised a
+    # validation error inside _search_one's broad except, which reported the
+    # ENTIRE connection as failed instead of surfacing the hit — silently
+    # discarding real results behind a scary "connection failed" error.
+    assert body["connection_errors"] == {}
     assert isinstance(body["hits"], list)
-    assert isinstance(body["connection_errors"], dict)
     # All hits must have required fields
     for h in body["hits"]:
         assert "name" in h
         assert "connection_id" in h
         assert h["resource_type"] in ("file", "folder")
+    assert any(h["name"] == "hello.txt" for h in body["hits"])
 
 
 def test_global_search_requires_auth(client: TestClient):

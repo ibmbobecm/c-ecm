@@ -25,9 +25,9 @@ JWT_EXPIRE_MINUTES = int(os.environ.get("FD_JWT_EXPIRE_MINUTES", str(24 * 60)))
 
 MAX_UPLOAD_BYTES = int(os.environ.get("FD_MAX_UPLOAD_BYTES", str(500 * 1024 * 1024)))
 
-# --- FileDrive's own login ---
+# --- C-ECM's own login ---
 # Logging into the app itself is separate from any backend's credentials —
-# you sign in as FileDrive once, then connect backends under Settings, each
+# you sign in as C-ECM once, then connect backends under Settings, each
 # stored so you don't re-enter them per session. Single local account for
 # now (same plaintext-locally, flagged-for-a-real-vault-later stance as
 # everything else here) — this app isn't multi-tenant.
@@ -49,9 +49,9 @@ FILENET_ENDPOINT_URL = os.environ.get(
     "FD_FILENET_ENDPOINT_URL", "http://localhost:9080/wsi/FNCEWS40MTOM/"
 )
 FILENET_OBJECT_STORE = os.environ.get("FD_FILENET_OBJECT_STORE", "HR2")
-# All FileDrive content lives under this folder in the object store, kept
+# All C-ECM content lives under this folder in the object store, kept
 # separate from whatever else already exists there (e.g. /Invoices, /test).
-FILENET_ROOT_PATH = os.environ.get("FD_FILENET_ROOT_PATH", "/FileDrive")
+FILENET_ROOT_PATH = os.environ.get("FD_FILENET_ROOT_PATH", "/C-ECM")
 
 # --- Java/EJB bridge for content-write operations ---
 # The WSI/SOAP transport has a server-side bug (NPE in PersisterBase) on any
@@ -126,3 +126,20 @@ DOCUSIGN_ACCOUNT_ID = os.environ.get("FD_DOCUSIGN_ACCOUNT_ID", "")
 DOCUSIGN_PRIVATE_KEY = os.environ.get("FD_DOCUSIGN_PRIVATE_KEY", "")
 DOCUSIGN_ENVIRONMENT = os.environ.get("FD_DOCUSIGN_ENVIRONMENT", "demo")  # "demo" | "production"
 DOCUSIGN_WEBHOOK_HMAC_KEY = os.environ.get("FD_DOCUSIGN_WEBHOOK_HMAC_KEY", "")
+
+# --- AI backend / IBM Watson -------------------------------------------------
+# Env var names intentionally match what ai_service.py and env.example already
+# documented before this became admin-settable (no FD_ prefix, unlike the
+# providers above) -- not renamed here to avoid silently breaking anyone who
+# already has these set. Admin Settings can override any of these at runtime
+# via settings_store, same fallback pattern as Google/MS/Box/DocuSign.
+FD_AI_BACKEND_DEFAULT = os.environ.get("FD_AI_BACKEND", "none").lower()
+IBM_CLOUD_API_KEY = os.environ.get("IBM_CLOUD_API_KEY", "")
+WATSONX_PROJECT_ID = os.environ.get("WATSONX_PROJECT_ID", "")
+WATSONX_URL = os.environ.get("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
+WATSONX_MODEL = os.environ.get("WATSONX_MODEL", "ibm/granite-4-h-small")
+WATSON_NLU_URL = os.environ.get("WATSON_NLU_URL", "")
+WATSON_NLU_APIKEY = os.environ.get("WATSON_NLU_APIKEY", "")
+WATSON_DISCO_URL = os.environ.get("WATSON_DISCO_URL", "")
+WATSON_DISCO_APIKEY = os.environ.get("WATSON_DISCO_APIKEY", "")
+WATSON_DISCO_PROJECT_ID = os.environ.get("WATSON_DISCO_PROJECT_ID", "")

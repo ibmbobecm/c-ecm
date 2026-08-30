@@ -53,3 +53,27 @@ def record_event(
 
 def list_events(**kwargs) -> list[dict]:
     return events_store.list_events(**kwargs)
+
+
+def count_events(**kwargs) -> int:
+    return events_store.count_events(**kwargs)
+
+
+def count_distinct_actors(**kwargs) -> int:
+    return events_store.count_distinct_actors(**kwargs)
+
+
+def aggregate_by_type(**kwargs) -> list[dict]:
+    return events_store.aggregate_by_type(**kwargs)
+
+
+def aggregate_by_actor(**kwargs) -> list[dict]:
+    return events_store.aggregate_by_actor(**kwargs)
+
+
+def aggregate_by_day(**kwargs) -> list[dict]:
+    return events_store.aggregate_by_day(**kwargs)
+
+
+def list_distinct_actors() -> list[str]:
+    return events_store.list_distinct_actors()

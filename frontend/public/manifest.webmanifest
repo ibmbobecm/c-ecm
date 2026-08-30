@@ -1,7 +1,7 @@
 {
-  "name": "FileDrive",
-  "short_name": "FileDrive",
-  "description": "Unified ECM drive — FileNet, Google Drive, S3, Azure and more",
+  "name": "C-ECM",
+  "short_name": "C-ECM",
+  "description": "Centralized Enterprise Content Management across FileNet, mainframe, Google Drive, S3, Azure and more",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",

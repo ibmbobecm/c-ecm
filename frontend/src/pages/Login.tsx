@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import { ApiError } from "../api/client";
 
-export function Login() {
+export function Login({ onBack }: { onBack?: () => void }) {
   const { login } = useAuth();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -25,8 +25,13 @@ export function Login() {
   return (
     <div className="auth-page">
       <form className="auth-card" onSubmit={submit}>
-        <h1>FileDrive</h1>
-        <p className="auth-subtitle">Sign in to your drive</p>
+        {onBack && (
+          <button type="button" className="auth-back-link" onClick={onBack}>
+            &larr; Back
+          </button>
+        )}
+        <h1>C-ECM</h1>
+        <p className="auth-subtitle">Centralized Enterprise Content Management</p>
 
         <label>
           Username

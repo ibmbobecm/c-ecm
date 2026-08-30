@@ -4,15 +4,13 @@ import type { FileItem, FileVersion } from "../types";
 import { Modal } from "./Modal";
 import { formatBytes, formatDate } from "../utils";
 
-export function VersionHistoryPanel({
+export function VersionHistoryContent({
   file,
   canEdit,
-  onClose,
   onRestored,
 }: {
   file: FileItem;
   canEdit: boolean;
-  onClose: () => void;
   onRestored: () => void;
 }) {
   const [versions, setVersions] = useState<FileVersion[]>([]);
@@ -42,7 +40,7 @@ export function VersionHistoryPanel({
   };
 
   return (
-    <Modal title={`Version history — ${file.name}`} onClose={onClose} width={480}>
+    <>
       {error && <div className="auth-error" style={{ marginBottom: 12 }}>{error}</div>}
       <div className="version-list">
         {versions.map((v) => (
@@ -76,6 +74,24 @@ export function VersionHistoryPanel({
           </div>
         ))}
       </div>
+    </>
+  );
+}
+
+export function VersionHistoryPanel({
+  file,
+  canEdit,
+  onClose,
+  onRestored,
+}: {
+  file: FileItem;
+  canEdit: boolean;
+  onClose: () => void;
+  onRestored: () => void;
+}) {
+  return (
+    <Modal title={`Version history — ${file.name}`} onClose={onClose} width={480}>
+      <VersionHistoryContent file={file} canEdit={canEdit} onRestored={onRestored} />
     </Modal>
   );
 }

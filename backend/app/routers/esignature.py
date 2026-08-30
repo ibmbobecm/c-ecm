@@ -105,7 +105,7 @@ def get_request(request_id: str, refresh: bool = Query(default=True), _user: Cur
 
 
 @router.post("/esignature/requests/{request_id}/void", response_model=ESignatureRequestOut)
-def void_request(request_id: str, reason: str = Query(default="Voided by FileDrive"), session: CurrentSession = Depends(get_current_session)):
+def void_request(request_id: str, reason: str = Query(default="Voided by C-ECM"), session: CurrentSession = Depends(get_current_session)):
     record = esignature_store.get(request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Signature request not found")
@@ -125,7 +125,7 @@ def void_request(request_id: str, reason: str = Query(default="Voided by FileDri
 @public_router.post("/esignature/webhook")
 async def docusign_webhook(request: Request):
     """DocuSign Connect posts here on envelope status changes. Deliberately
-    unauthenticated (DocuSign is the caller, not a FileDrive session) —
+    unauthenticated (DocuSign is the caller, not a C-ECM session) —
     HMAC verification is the actual security boundary here, matching how
     routers/sharing.py's public route relies on the token, not a session."""
     raw_body = await request.body()
