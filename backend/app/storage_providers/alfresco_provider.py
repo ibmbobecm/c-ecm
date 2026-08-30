@@ -11,8 +11,8 @@ this wasn't).
 The server is per-connection (`config_fields` collects `base_url`), not a
 single global — different connections can point at entirely different
 Alfresco instances. Unlike FileNet, Alfresco addresses everything by node
-id, not by path — so `folder_id=None` (FileDrive's "root") is resolved once
-to a real node id (a dedicated "FileDrive" folder under Company Home,
+id, not by path — so `folder_id=None` (C-ECM's "root") is resolved once
+to a real node id (a dedicated "C-ECM" folder under Company Home,
 created on first use) and cached *per base URL*, since this provider
 instance is shared across every connection to it.
 """
@@ -34,7 +34,7 @@ from .base import (
     VersionInfo,
 )
 
-_APP_ROOT_NAME = "FileDrive"
+_APP_ROOT_NAME = "C-ECM"
 _TRASH_NAME = "$Trash"
 
 

@@ -5,7 +5,7 @@ import { Modal } from "./Modal";
 import { formatDate } from "../utils";
 import { Icon } from "../icons";
 
-export function CommentsPanel({ item, onClose, onChange }: { item: DriveItem; onClose: () => void; onChange: () => void }) {
+export function CommentsPanelContent({ item, onChange }: { item: DriveItem; onChange: () => void }) {
   const [comments, setComments] = useState<Comment[]>([]);
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
@@ -59,7 +59,7 @@ export function CommentsPanel({ item, onClose, onChange }: { item: DriveItem; on
   };
 
   return (
-    <Modal title={`Comments — ${item.name}`} onClose={onClose} width={440}>
+    <>
       <div className="comment-list">
         {comments.length === 0 && <p className="muted">No comments yet.</p>}
         {comments.map((c) => (
@@ -99,6 +99,14 @@ export function CommentsPanel({ item, onClose, onChange }: { item: DriveItem; on
           </button>
         </div>
       </form>
+    </>
+  );
+}
+
+export function CommentsPanel({ item, onClose, onChange }: { item: DriveItem; onClose: () => void; onChange: () => void }) {
+  return (
+    <Modal title={`Comments — ${item.name}`} onClose={onClose} width={440}>
+      <CommentsPanelContent item={item} onChange={onChange} />
     </Modal>
   );
 }

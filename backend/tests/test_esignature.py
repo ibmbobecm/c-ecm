@@ -1,6 +1,6 @@
 """Router-level tests for /files/{id}/esignature and /esignature/*.
 esignature_service's DocuSign HTTP calls are mocked here — this exercises
-FileDrive's own request handling, storage, role-gating, and the
+C-ECM's own request handling, storage, role-gating, and the
 webhook-driven "attach signed document as a new version" flow.
 """
 from unittest.mock import patch

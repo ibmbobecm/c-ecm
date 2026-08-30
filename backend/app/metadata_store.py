@@ -5,7 +5,7 @@ date, boolean, select).  When a user uploads a file they can assign it a
 class, and the UI then shows the matching fields for the user to fill in.
 Values are stored as a JSON blob keyed by the field key.
 
-This is intentionally FileDrive-native (not mapped to FileNet CE document
+This is intentionally C-ECM-native (not mapped to FileNet CE document
 classes or Alfresco content models in this release) — it works identically
 across all nine providers.  A future provider override can sync to the
 native class system if needed.
@@ -26,6 +26,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
     return conn
 
 

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import activity_service, comments_store, esignature_store, locks_store, metadata_store, share_links_store, tags_store
+from .. import activity_service, comments_store, esignature_store, locks_store, metadata_store, share_links_store, tags_store, workflows_store
 from ..access_helpers import to_http
 from ..auth import CurrentSession, get_current_session
 from ..config import MAX_UPLOAD_BYTES
@@ -92,6 +92,14 @@ def download_file(file_id: str, session: CurrentSession = Depends(get_current_se
         data = session.provider.get_content(session.creds, file_id)
     except ProviderError as exc:
         raise to_http(exc)
+    # Covers both the in-app preview (FilePreview.tsx hits this same endpoint
+    # to render images/PDF/docx/etc.) and an explicit Download click — the
+    # backend can't tell those apart, and for an audit trail "was this
+    # document's content accessed" is the meaningful question either way.
+    activity_service.record_event(
+        connection_id=session.connection_id, provider_key=session.provider_key, resource_type="file",
+        resource_id=file_id, resource_name=info.name, event_type="viewed", actor=_actor(session),
+    )
     from fastapi.responses import Response
     return Response(
         content=data,
@@ -144,6 +152,11 @@ def download_version(file_id: str, version_id: str, session: CurrentSession = De
     except ProviderError as exc:
         raise to_http(exc)
     version_content_type = next((v.content_type for v in versions if v.id == version_id), None)
+    activity_service.record_event(
+        connection_id=session.connection_id, provider_key=session.provider_key, resource_type="file",
+        resource_id=file_id, resource_name=info.name, event_type="viewed", actor=_actor(session),
+        payload={"version_id": version_id},
+    )
     from fastapi.responses import Response
     return Response(
         content=data,
@@ -197,6 +210,7 @@ def delete_file_permanent(file_id: str, session: CurrentSession = Depends(get_cu
     share_links_store.delete_for_resource(session.connection_id, file_id)
     metadata_store.delete_for_resource(session.connection_id, file_id)
     esignature_store.delete_for_resource(session.connection_id, file_id)
+    workflows_store.delete_for_resource(session.connection_id, file_id)
     locks_store.checkin(session.connection_id, file_id)  # release any stale checkout
     activity_service.record_event(
         connection_id=session.connection_id, provider_key=session.provider_key, resource_type="file",

@@ -16,7 +16,7 @@ router = APIRouter(tags=["sharing"])
 
 # Deliberately no APIRouter prefix shared with the authenticated endpoints
 # below — GET /share/{token} is the one route in this app a visitor with
-# no FileDrive login reaches at all, so it can't sit behind
+# no C-ECM login reaches at all, so it can't sit behind
 # get_current_session like everything else.
 public_router = APIRouter(tags=["sharing-public"])
 

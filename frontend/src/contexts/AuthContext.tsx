@@ -47,6 +47,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = () => {
+    // Best-effort — invalidates the server-side session and logs the audit
+    // event; must fire before the token is cleared below since it needs a
+    // still-valid Authorization header. Not awaited: a slow/dead backend
+    // shouldn't block signing out locally.
+    apiPost("/auth/logout").catch(() => {});
     localStorage.removeItem(STORAGE_KEY);
     setAuthToken(null);
     setActiveConnectionId(null);

@@ -195,16 +195,12 @@ function ClassListView({ onClose }: { onClose: () => void }) {
 
 // ---------- Metadata editor (per resource) -----------------------------------
 
-function MetadataEditorView({
+export function MetadataEditorContent({
   resourceId,
   resourceType,
-  resourceName,
-  onClose,
 }: {
   resourceId: string;
   resourceType: "file" | "folder";
-  resourceName: string;
-  onClose: () => void;
 }) {
   const [classes, setClasses] = useState<DocumentClass[]>([]);
   const [meta, setMeta] = useState<ResourceMetadata | null>(null);
@@ -254,7 +250,7 @@ function MetadataEditorView({
   const setFieldValue = (key: string, val: unknown) => setValues((prev) => ({ ...prev, [key]: val }));
 
   return (
-    <Modal title={`Metadata — ${resourceName}`} onClose={onClose} width={480}>
+    <>
       {loading ? (
         <p className="muted">Loading…</p>
       ) : (
@@ -304,7 +300,7 @@ function MetadataEditorView({
           <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save metadata"}</button>
         </form>
       )}
-    </Modal>
+    </>
   );
 }
 
@@ -323,12 +319,9 @@ export function DocumentClassesPanel({
 }) {
   if (resourceId && resourceType && resourceName) {
     return (
-      <MetadataEditorView
-        resourceId={resourceId}
-        resourceType={resourceType}
-        resourceName={resourceName}
-        onClose={onClose}
-      />
+      <Modal title={`Metadata — ${resourceName}`} onClose={onClose} width={480}>
+        <MetadataEditorContent resourceId={resourceId} resourceType={resourceType} />
+      </Modal>
     );
   }
   return <ClassListView onClose={onClose} />;

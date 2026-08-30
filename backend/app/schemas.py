@@ -92,6 +92,19 @@ class AdminSettingsOut(BaseModel):
     docusign_environment: str
     docusign_webhook_hmac_key_set: bool
     docusign_configured: bool
+    ai_backend: str
+    ibm_cloud_api_key_set: bool
+    watsonx_project_id: str
+    watsonx_url: str
+    watsonx_model: str
+    watsonx_configured: bool
+    watson_nlu_url: str
+    watson_nlu_apikey_set: bool
+    watson_nlu_configured: bool
+    watson_disco_url: str
+    watson_disco_apikey_set: bool
+    watson_disco_project_id: str
+    watson_disco_configured: bool
 
 
 class AdminSettingsUpdate(BaseModel):
@@ -108,6 +121,16 @@ class AdminSettingsUpdate(BaseModel):
     docusign_private_key: str | None = None
     docusign_environment: str | None = None
     docusign_webhook_hmac_key: str | None = None
+    ai_backend: str | None = None
+    ibm_cloud_api_key: str | None = None
+    watsonx_project_id: str | None = None
+    watsonx_url: str | None = None
+    watsonx_model: str | None = None
+    watson_nlu_url: str | None = None
+    watson_nlu_apikey: str | None = None
+    watson_disco_url: str | None = None
+    watson_disco_apikey: str | None = None
+    watson_disco_project_id: str | None = None
 
 
 class FolderCreateRequest(BaseModel):
@@ -182,7 +205,7 @@ class GlobalSearchHit(BaseModel):
     name: str
     size_bytes: int | None = None
     content_type: str | None = None
-    updated_at: str | None = None
+    updated_at: datetime.datetime | None = None
 
 
 class GlobalSearchResultOut(BaseModel):
@@ -205,6 +228,41 @@ class ActivityEventOut(BaseModel):
     actor: str
     payload: dict
     created_at: str
+
+
+class ActivityTypeCountOut(BaseModel):
+    event_type: str
+    count: int
+
+
+class ActivityActorCountOut(BaseModel):
+    actor: str
+    count: int
+
+
+class ActivityDayCountOut(BaseModel):
+    day: str
+    count: int
+
+
+class ActivityAlertOut(BaseModel):
+    severity: str  # "warning" | "danger"
+    title: str
+    detail: str
+    actor: str
+    event_type: str
+    count: int
+    window_start: str
+    window_end: str
+
+
+class ActivitySummaryOut(BaseModel):
+    total_events: int
+    unique_actors: int
+    by_type: list[ActivityTypeCountOut]
+    by_actor: list[ActivityActorCountOut]
+    by_day: list[ActivityDayCountOut]
+    alerts: list[ActivityAlertOut]
 
 
 # --- tags ---

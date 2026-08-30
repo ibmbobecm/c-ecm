@@ -19,6 +19,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
     return conn
 
 

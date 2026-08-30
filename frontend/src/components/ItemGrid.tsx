@@ -1,4 +1,4 @@
-import type { DriveItem, Lock, SortKey, SortState, Tag } from "../types";
+import type { DriveItem, Lock, SortKey, SortState, Tag, WorkflowInstance } from "../types";
 import { fileTypeIconName, Icon, type IconName } from "../icons";
 import { formatBytes, formatDate, keyOf } from "../utils";
 import { EmptyState } from "./EmptyState";
@@ -21,6 +21,15 @@ function CommentBadge({ count }: { count: number }) {
     <span className="comment-badge" title={`${count} comment${count === 1 ? "" : "s"}`}>
       <Icon name="message" size={11} />
       {count}
+    </span>
+  );
+}
+
+function ApprovalBadge({ instance }: { instance: WorkflowInstance | undefined }) {
+  if (!instance) return null;
+  return (
+    <span className="approval-badge" title={`Pending approval — requested by ${instance.requested_by}`}>
+      <Icon name="check-circle" size={11} />
     </span>
   );
 }
@@ -58,6 +67,7 @@ export function ItemGrid({
   tagsByResource,
   commentCounts,
   locksByResource,
+  pendingApprovalsByResource,
   selectedIds,
   sort,
   onSortChange,
@@ -77,6 +87,7 @@ export function ItemGrid({
   tagsByResource: Record<string, Tag[]>;
   commentCounts: Record<string, number>;
   locksByResource: Record<string, Lock>;
+  pendingApprovalsByResource: Record<string, WorkflowInstance>;
   selectedIds: Set<string>;
   sort: SortState;
   onSortChange: (key: SortKey) => void;
@@ -164,6 +175,7 @@ export function ItemGrid({
                       {item.name}
                       <TagDots tags={tagsByResource[item.id] ?? []} />
                       <CommentBadge count={commentCounts[item.id] ?? 0} />
+                      <ApprovalBadge instance={pendingApprovalsByResource[item.id]} />
                       {item.type === "file" && locksByResource[item.id] && (
                         <LockBadge lock={locksByResource[item.id]} />
                       )}
@@ -220,6 +232,7 @@ export function ItemGrid({
             <div className="item-tile-badges">
               <TagDots tags={tagsByResource[item.id] ?? []} />
               <CommentBadge count={commentCounts[item.id] ?? 0} />
+              <ApprovalBadge instance={pendingApprovalsByResource[item.id]} />
               {item.type === "file" && locksByResource[item.id] && (
                 <LockBadge lock={locksByResource[item.id]} />
               )}

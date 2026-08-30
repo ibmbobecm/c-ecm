@@ -3,7 +3,7 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
-from .. import comments_store, connections_store, esignature_store, locks_store, metadata_store, share_links_store, tags_store
+from .. import comments_store, connections_store, esignature_store, locks_store, metadata_store, share_links_store, tags_store, workflows_store
 from ..auth import CurrentUser, get_current_user, require_role
 from ..schemas import ConfigFieldOut, ConnectionCreateRequest, ConnectionOut, ProviderOut
 from ..storage_providers.base import AuthMode, ProviderError
@@ -80,9 +80,10 @@ def create_connection(req: ConnectionCreateRequest, _user: CurrentUser = Depends
 @router.delete("/{connection_id}", status_code=204)
 def delete_connection(connection_id: str, _user: CurrentUser = Depends(_admin)):
     connections_store.delete_connection(connection_id)
-    # Tags/comments/share-links/metadata/locks live in their own SQLite
-    # files — clean them all up so nothing orphans forever referencing a
-    # connection_id that can never be resolved again.
+    # Tags/comments/share-links/metadata/locks/e-signatures/workflow
+    # instances live in their own SQLite files — clean them all up so
+    # nothing orphans forever referencing a connection_id that can never
+    # be resolved again.
     # The activity log is deliberately excluded — an audit trail should
     # outlive the thing it's about, not disappear with it.
     tags_store.delete_for_connection(connection_id)
@@ -91,6 +92,7 @@ def delete_connection(connection_id: str, _user: CurrentUser = Depends(_admin)):
     metadata_store.delete_for_connection(connection_id)
     locks_store.delete_for_connection(connection_id)
     esignature_store.delete_for_connection(connection_id)
+    workflows_store.delete_for_connection(connection_id)
 
 
 @router.get("/oauth/{provider_key}/start")

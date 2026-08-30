@@ -71,6 +71,16 @@ export function AdminSettingsPanel({
   const [dsPrivateKey, setDsPrivateKey] = useState("");
   const [dsEnvironment, setDsEnvironment] = useState("demo");
   const [dsWebhookKey, setDsWebhookKey] = useState("");
+  const [aiBackend, setAiBackend] = useState("none");
+  const [ibmCloudApiKey, setIbmCloudApiKey] = useState("");
+  const [watsonxProjectId, setWatsonxProjectId] = useState("");
+  const [watsonxUrl, setWatsonxUrl] = useState("");
+  const [watsonxModel, setWatsonxModel] = useState("");
+  const [watsonNluUrl, setWatsonNluUrl] = useState("");
+  const [watsonNluApikey, setWatsonNluApikey] = useState("");
+  const [watsonDiscoUrl, setWatsonDiscoUrl] = useState("");
+  const [watsonDiscoApikey, setWatsonDiscoApikey] = useState("");
+  const [watsonDiscoProjectId, setWatsonDiscoProjectId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -93,6 +103,13 @@ export function AdminSettingsPanel({
         setDsUserId(s.docusign_user_id);
         setDsAccountId(s.docusign_account_id);
         setDsEnvironment(s.docusign_environment || "demo");
+        setAiBackend(s.ai_backend || "none");
+        setWatsonxProjectId(s.watsonx_project_id);
+        setWatsonxUrl(s.watsonx_url);
+        setWatsonxModel(s.watsonx_model);
+        setWatsonNluUrl(s.watson_nlu_url);
+        setWatsonDiscoUrl(s.watson_disco_url);
+        setWatsonDiscoProjectId(s.watson_disco_project_id);
       })
       .catch((err) => setLoadError(err instanceof ApiError ? err.message : "Couldn't load OAuth settings."));
   };
@@ -119,6 +136,16 @@ export function AdminSettingsPanel({
         docusign_private_key: dsPrivateKey || undefined,
         docusign_environment: dsEnvironment || undefined,
         docusign_webhook_hmac_key: dsWebhookKey || undefined,
+        ai_backend: aiBackend || undefined,
+        ibm_cloud_api_key: ibmCloudApiKey || undefined,
+        watsonx_project_id: watsonxProjectId || undefined,
+        watsonx_url: watsonxUrl || undefined,
+        watsonx_model: watsonxModel || undefined,
+        watson_nlu_url: watsonNluUrl || undefined,
+        watson_nlu_apikey: watsonNluApikey || undefined,
+        watson_disco_url: watsonDiscoUrl || undefined,
+        watson_disco_apikey: watsonDiscoApikey || undefined,
+        watson_disco_project_id: watsonDiscoProjectId || undefined,
       });
       setSettings(updated);
       setGoogleSecret("");
@@ -126,6 +153,9 @@ export function AdminSettingsPanel({
       setBoxSecret("");
       setDsPrivateKey("");
       setDsWebhookKey("");
+      setIbmCloudApiKey("");
+      setWatsonNluApikey("");
+      setWatsonDiscoApikey("");
       setSaved(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Couldn't save settings.");
@@ -278,6 +308,119 @@ export function AdminSettingsPanel({
                   onChange={(e) => setDsWebhookKey(e.target.value)}
                   placeholder={settings.docusign_webhook_hmac_key_set ? "•••••••• (set — leave blank to keep)" : "Configured on the DocuSign Connect webhook"}
                 />
+              </label>
+            </fieldset>
+          )}
+
+          {showAll && (
+            <fieldset className="admin-fieldset">
+              <legend>AI backend</legend>
+              <label>
+                Active backend
+                <select value={aiBackend} onChange={(e) => setAiBackend(e.target.value)}>
+                  <option value="none">Disabled</option>
+                  <option value="openai">OpenAI (or compatible)</option>
+                  <option value="ollama">Local Ollama</option>
+                  <option value="watsonx">IBM watsonx.ai</option>
+                  <option value="watson_nlu">IBM Watson NLU (classification only)</option>
+                  <option value="watson_disco">IBM Watson Discovery (search + Q&amp;A)</option>
+                </select>
+              </label>
+              <p className="muted" style={{ margin: "4px 0 0", fontSize: 12 }}>
+                OpenAI and Ollama are still configured via server environment variables
+                (FD_AI_API_KEY, FD_OLLAMA_URL, etc.) — only the active backend and IBM
+                Watson's own credentials are editable here.
+              </p>
+            </fieldset>
+          )}
+
+          {showAll && (
+            <fieldset className="admin-fieldset">
+              <legend>IBM watsonx.ai</legend>
+              <p className="muted" style={{ margin: "0 0 4px", fontSize: 12 }}>
+                Text generation for summaries, metadata suggestions, and Q&amp;A.
+                {settings.watsonx_configured ? " Currently configured." : " Not yet configured."}
+              </p>
+              <label>
+                IBM Cloud API key
+                <input
+                  type="password"
+                  value={ibmCloudApiKey}
+                  onChange={(e) => setIbmCloudApiKey(e.target.value)}
+                  placeholder={settings.ibm_cloud_api_key_set ? "•••••••• (set — leave blank to keep)" : ""}
+                />
+              </label>
+              <label>
+                Project ID
+                <input value={watsonxProjectId} onChange={(e) => setWatsonxProjectId(e.target.value)} />
+              </label>
+              <label>
+                Service URL
+                <input
+                  value={watsonxUrl}
+                  onChange={(e) => setWatsonxUrl(e.target.value)}
+                  placeholder="https://us-south.ml.cloud.ibm.com"
+                />
+              </label>
+              <label>
+                Model
+                <input
+                  value={watsonxModel}
+                  onChange={(e) => setWatsonxModel(e.target.value)}
+                  placeholder="ibm/granite-13b-chat-v2"
+                />
+              </label>
+            </fieldset>
+          )}
+
+          {showAll && (
+            <fieldset className="admin-fieldset">
+              <legend>IBM Watson NLU</legend>
+              <p className="muted" style={{ margin: "0 0 4px", fontSize: 12 }}>
+                Document classification via categories, keywords, and entities.
+                {settings.watson_nlu_configured ? " Currently configured." : " Not yet configured."}
+              </p>
+              <label>
+                Instance URL
+                <input value={watsonNluUrl} onChange={(e) => setWatsonNluUrl(e.target.value)} />
+              </label>
+              <label>
+                API key
+                <input
+                  type="password"
+                  value={watsonNluApikey}
+                  onChange={(e) => setWatsonNluApikey(e.target.value)}
+                  placeholder={settings.watson_nlu_apikey_set ? "•••••••• (set — leave blank to keep)" : ""}
+                />
+              </label>
+            </fieldset>
+          )}
+
+          {showAll && (
+            <fieldset className="admin-fieldset">
+              <legend>IBM Watson Discovery</legend>
+              <p className="muted" style={{ margin: "0 0 4px", fontSize: 12 }}>
+                Deep document search and passage-based Q&amp;A across a corpus. Can be
+                paired with watsonx.ai above for a generative answer on top of the
+                retrieved passages.
+                {settings.watson_disco_configured ? " Currently configured." : " Not yet configured."}
+              </p>
+              <label>
+                Instance URL
+                <input value={watsonDiscoUrl} onChange={(e) => setWatsonDiscoUrl(e.target.value)} />
+              </label>
+              <label>
+                API key
+                <input
+                  type="password"
+                  value={watsonDiscoApikey}
+                  onChange={(e) => setWatsonDiscoApikey(e.target.value)}
+                  placeholder={settings.watson_disco_apikey_set ? "•••••••• (set — leave blank to keep)" : ""}
+                />
+              </label>
+              <label>
+                Project ID
+                <input value={watsonDiscoProjectId} onChange={(e) => setWatsonDiscoProjectId(e.target.value)} />
               </label>
             </fieldset>
           )}

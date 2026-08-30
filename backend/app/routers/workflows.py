@@ -113,6 +113,7 @@ def act(instance_id: str, req: WorkflowStepActionRequest, session: CurrentSessio
         raise HTTPException(status_code=404, detail="Workflow instance not found")
     if inst["status"] != "in_review":
         raise HTTPException(status_code=409, detail="This workflow is no longer awaiting action")
+    prev_step = inst["current_step"]
     try:
         updated = workflows_store.act_on_step(instance_id, _actor(session), req.action, req.comment)
     except workflows_store.NotAnAuthorizedReviewerError:
@@ -121,15 +122,31 @@ def act(instance_id: str, req: WorkflowStepActionRequest, session: CurrentSessio
         raise HTTPException(status_code=409, detail="You've already recorded an action on this step")
     if updated is None:
         raise HTTPException(status_code=409, detail="Action could not be applied")
+    # req.action alone doesn't say what actually happened: an "approved" vote
+    # might just be one of several needed on this step (nothing changed for
+    # anyone else yet), might advance to a *different* step's reviewers, or
+    # might be the final approval. Reporting it as "workflow_approved"
+    # unconditionally — as this used to do — fired a "your document was
+    # approved" notification on every partial vote, well before the
+    # workflow was actually done. A rejection is always terminal, so that
+    # case doesn't have this ambiguity.
+    if updated["status"] == "rejected":
+        event_type = "workflow_rejected"
+    elif updated["status"] == "approved":
+        event_type = "workflow_approved"
+    elif updated["current_step"] != prev_step:
+        event_type = "workflow_step_advanced"
+    else:
+        event_type = "workflow_step_voted"
     activity_service.record_event(
         connection_id=session.connection_id,
         provider_key=session.provider_key,
         resource_type=inst["resource_type"],
         resource_id=inst["resource_id"],
         resource_name=inst["resource_name"],
-        event_type=f"workflow_{req.action}",
+        event_type=event_type,
         actor=_actor(session),
-        payload={"instance_id": instance_id, "comment": req.comment},
+        payload={"instance_id": instance_id, "comment": req.comment, "step_index": prev_step},
     )
     return WorkflowInstanceOut(**updated)
 
@@ -145,4 +162,14 @@ def cancel_instance(instance_id: str, session: CurrentSession = Depends(get_curr
     updated = workflows_store.cancel_instance(instance_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Workflow instance not found or already completed")
+    activity_service.record_event(
+        connection_id=session.connection_id,
+        provider_key=session.provider_key,
+        resource_type=inst["resource_type"],
+        resource_id=inst["resource_id"],
+        resource_name=inst["resource_name"],
+        event_type="workflow_cancelled",
+        actor=_actor(session),
+        payload={"instance_id": instance_id},
+    )
     return WorkflowInstanceOut(**updated)

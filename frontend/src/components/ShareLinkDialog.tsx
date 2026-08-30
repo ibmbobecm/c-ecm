@@ -5,7 +5,7 @@ import { Modal } from "./Modal";
 import { Icon } from "../icons";
 import { formatDate } from "../utils";
 
-export function ShareLinkDialog({ item, onClose }: { item: DriveItem; onClose: () => void }) {
+export function ShareLinkDialogContent({ item }: { item: DriveItem }) {
   const [links, setLinks] = useState<ShareLink[]>([]);
   const [role, setRole] = useState<"view" | "comment" | "edit">("view");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
@@ -63,7 +63,7 @@ export function ShareLinkDialog({ item, onClose }: { item: DriveItem; onClose: (
   };
 
   return (
-    <Modal title={`Share "${item.name}"`} onClose={onClose} width={440}>
+    <>
       {links.length > 0 && (
         <div className="share-link-list">
           {links.map((l) => (
@@ -120,6 +120,14 @@ export function ShareLinkDialog({ item, onClose }: { item: DriveItem; onClose: (
           {busy ? "Creating..." : "Create link"}
         </button>
       </form>
+    </>
+  );
+}
+
+export function ShareLinkDialog({ item, onClose }: { item: DriveItem; onClose: () => void }) {
+  return (
+    <Modal title={`Share "${item.name}"`} onClose={onClose} width={440}>
+      <ShareLinkDialogContent item={item} />
     </Modal>
   );
 }

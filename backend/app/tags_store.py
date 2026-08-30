@@ -1,4 +1,4 @@
-"""Tags/custom metadata — deliberately FileDrive-native and backend-agnostic
+"""Tags/custom metadata — deliberately C-ECM-native and backend-agnostic
 (no StorageProvider involvement at all), mirroring how connections_store.py
 already sits outside the provider Strategy hierarchy. No backend's native
 tag concept (Drive Labels, Box metadata templates, Alfresco Aspects, ...)
@@ -20,6 +20,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
     return conn
 
 

@@ -9,10 +9,14 @@ import { Modal } from "./Modal";
 import { Icon } from "../icons";
 
 const ALL_EVENT_TYPES = [
+  "login", "login_failed", "logout", "viewed",
   "created", "renamed", "moved", "deleted", "permanently_deleted", "restored",
   "version_created", "version_restored", "checked_out", "checked_in",
-  "workflow_started", "workflow_approved", "workflow_rejected", "workflow_cancelled",
-  "comment_added", "tag_added",
+  "workflow_started", "workflow_step_voted", "workflow_step_advanced", "workflow_approved", "workflow_rejected", "workflow_cancelled",
+  // These two were previously named "comment_added"/"tag_added" here, which
+  // don't match what comments.py/tags.py actually emit ("commented"/
+  // "tagged") — a webhook subscribed to either literally never fired.
+  "commented", "tagged",
 ];
 
 function StatusDot({ active, lastCode }: { active: boolean; lastCode: number | null }) {

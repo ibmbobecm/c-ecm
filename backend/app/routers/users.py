@@ -1,4 +1,4 @@
-"""Users router — CRUD for FileDrive's own user accounts (multi-user RBAC).
+"""Users router — CRUD for C-ECM's own user accounts (multi-user RBAC).
 
 All write operations require the 'admin' role.  GET /users/me is
 available to any authenticated user.

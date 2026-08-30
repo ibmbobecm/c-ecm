@@ -6,7 +6,15 @@ import { Icon } from "../icons";
 
 const SWATCHES = ["#5B8DEF", "#1E8E3E", "#E8710A", "#D93025", "#9334E6", "#00838F", "#D6409F", "#5F6368"];
 
-export function TagsDialog({ item, onClose, onChange }: { item: DriveItem; onClose: () => void; onChange: () => void }) {
+export function TagsDialogContent({
+  item,
+  onChange,
+  onClose,
+}: {
+  item: DriveItem;
+  onChange: () => void;
+  onClose?: () => void;
+}) {
   const [allTags, setAllTags] = useState<Tag[]>([]);
   const [resourceTags, setResourceTags] = useState<Tag[]>([]);
   const [newName, setNewName] = useState("");
@@ -72,7 +80,7 @@ export function TagsDialog({ item, onClose, onChange }: { item: DriveItem; onClo
   };
 
   return (
-    <Modal title={`Tags — ${item.name}`} onClose={onClose} width={380}>
+    <>
       {resourceTags.length > 0 && (
         <div className="tag-chip-row">
           {resourceTags.map((t) => (
@@ -127,14 +135,24 @@ export function TagsDialog({ item, onClose, onChange }: { item: DriveItem; onClo
           ))}
         </div>
         <div className="modal-actions">
-          <button type="button" className="secondary" onClick={onClose}>
-            Done
-          </button>
+          {onClose && (
+            <button type="button" className="secondary" onClick={onClose}>
+              Done
+            </button>
+          )}
           <button type="submit" disabled={!newName.trim() || busy}>
             Create &amp; add
           </button>
         </div>
       </form>
+    </>
+  );
+}
+
+export function TagsDialog({ item, onClose, onChange }: { item: DriveItem; onClose: () => void; onChange: () => void }) {
+  return (
+    <Modal title={`Tags — ${item.name}`} onClose={onClose} width={380}>
+      <TagsDialogContent item={item} onChange={onChange} onClose={onClose} />
     </Modal>
   );
 }

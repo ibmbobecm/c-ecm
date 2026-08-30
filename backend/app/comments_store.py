@@ -1,4 +1,4 @@
-"""Comments — a FileDrive-native layer (Repository pattern) so commenting
+"""Comments — a C-ECM-native layer (Repository pattern) so commenting
 works uniformly even on backends with no native comments at all (M-Files)
 or comments with no public API (Dropbox). Comment creation is wired to the
 activity log by the router, not this module — this is pure storage.
@@ -19,6 +19,11 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    # Unset (0) by default — a writer that can't get the lock immediately
+    # would raise "database is locked" instantly instead of waiting a
+    # moment for the current writer to finish, which starts happening in
+    # practice once more than a couple of requests write concurrently.
+    conn.execute("PRAGMA busy_timeout=5000")
     return conn
 
 

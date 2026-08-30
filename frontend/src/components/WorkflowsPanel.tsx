@@ -7,7 +7,7 @@
  */
 import { useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
-import type { WorkflowInstance, WorkflowDefinition, WorkflowStepDef } from "../types";
+import type { User, WorkflowInstance, WorkflowDefinition, WorkflowStepDef } from "../types";
 import { useAuth } from "../contexts/AuthContext";
 import { useConnections } from "../contexts/ConnectionsContext";
 import { Icon } from "../icons";
@@ -17,7 +17,7 @@ import { formatDate } from "../utils";
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-function StatusBadge({ status }: { status: WorkflowInstance["status"] }) {
+export function StatusBadge({ status }: { status: WorkflowInstance["status"] }) {
   const map: Record<string, { label: string; style: React.CSSProperties }> = {
     in_review: { label: "Pending",   style: { background: "var(--warning-tint)", color: "var(--warning)" } },
     approved:  { label: "Approved",  style: { background: "var(--success-tint)", color: "var(--success)" } },
@@ -42,6 +42,41 @@ function Card({ children }: { children: React.ReactNode }) {
       marginBottom: "var(--space-3)",
     }}>
       {children}
+    </div>
+  );
+}
+
+/** The audit trail behind every instance — who acted on which step, with
+ * what comment, when. The backend has always returned this (step_actions),
+ * but nothing rendered it: an instance's whole history was invisible once
+ * you weren't the one currently holding the ball. */
+export function StepTimeline({ instance, definition }: { instance: WorkflowInstance; definition?: WorkflowDefinition }) {
+  const [open, setOpen] = useState(false);
+  if (instance.step_actions.length === 0) return null;
+  const stepName = (idx: number) => definition?.steps[idx]?.name ?? `Step ${idx + 1}`;
+  return (
+    <div style={{ marginTop: "var(--space-2)" }}>
+      <button
+        type="button"
+        className="link-btn"
+        style={{ fontSize: 12 }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {open ? "Hide" : "Show"} history ({instance.step_actions.length})
+      </button>
+      {open && (
+        <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 6 }}>
+          {instance.step_actions.map((a) => (
+            <div key={a.id} style={{ fontSize: "var(--text-sm)", borderLeft: `2px solid ${a.action === "approved" ? "var(--success)" : "var(--danger)"}`, paddingLeft: 8 }}>
+              <div>
+                <strong>{a.reviewer}</strong> {a.action === "approved" ? "approved" : "rejected"} · {stepName(a.step_index)}
+                <span className="muted" style={{ marginLeft: 6 }}>{formatDate(a.acted_at)}</span>
+              </div>
+              {a.comment && <div className="muted" style={{ fontStyle: "italic" }}>"{a.comment}"</div>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -139,15 +174,21 @@ function InboxTab({
             </div>
             <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: 4 }}>
               Workflow: <strong>{defName(inst.definition_id)}</strong>
-              {stepDef && <> · Step: <strong>{stepDef.name}</strong></>}
+              {def && stepDef && <> · Step {inst.current_step + 1} of {def.steps.length}: <strong>{stepDef.name}</strong></>}
               {" · "}Requested by <strong>{inst.requested_by}</strong>
               {" · "}{formatDate(inst.created_at)}
             </div>
+            {stepDef && stepDef.reviewers.length > 1 && (
+              <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 4 }}>
+                Needs {stepDef.required_approvals} of {stepDef.reviewers.length} reviewers: {stepDef.reviewers.join(", ")}
+              </div>
+            )}
             {inst.comment && (
               <p style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", margin: "4px 0 8px", fontStyle: "italic" }}>
                 "{inst.comment}"
               </p>
             )}
+            <StepTimeline instance={inst} definition={def} />
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: "var(--space-3)" }}>
               <input
                 placeholder="Comment (optional)"
@@ -233,7 +274,10 @@ function MyRequestsTab({
         </div>
       )}
 
-      {mine.map((inst) => (
+      {mine.map((inst) => {
+        const def = definitions.find((d) => d.id === inst.definition_id);
+        const stepDef = def?.steps[inst.current_step];
+        return (
         <Card key={inst.id}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
             <span style={{ fontWeight: 600, fontSize: "var(--text-base)" }}>
@@ -243,6 +287,10 @@ function MyRequestsTab({
           </div>
           <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: 4 }}>
             Workflow: <strong>{defName(inst.definition_id)}</strong>
+            {inst.status === "in_review" && def && stepDef && (
+              <> · Awaiting step {inst.current_step + 1} of {def.steps.length}: <strong>{stepDef.name}</strong>
+              {stepDef.reviewers.length > 0 ? ` (${stepDef.reviewers.join(", ")})` : " (any reviewer)"}</>
+            )}
             {" · "}{formatDate(inst.created_at)}
             {inst.completed_at && <> · Completed {formatDate(inst.completed_at)}</>}
           </div>
@@ -251,6 +299,7 @@ function MyRequestsTab({
               "{inst.comment}"
             </p>
           )}
+          <StepTimeline instance={inst} definition={def} />
           {inst.status === "in_review" && (
             <button
               className="btn-secondary"
@@ -262,7 +311,8 @@ function MyRequestsTab({
             </button>
           )}
         </Card>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -288,6 +338,17 @@ function DesignerTab({
   const [formError, setFormError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [users, setUsers] = useState<User[]>([]);
+
+  // Reviewers used to be a freeform comma-separated username field — a
+  // single typo silently created a step nobody could ever act on (an
+  // unrecognized username just never matches the current reviewer, so
+  // that step — and the whole instance — would sit in_review forever).
+  // Picking from real accounts makes that class of mistake impossible.
+  useEffect(() => {
+    apiGet<User[]>("/users").then(setUsers).catch(() => {});
+  }, []);
+  const activeUsers = users.filter((u) => u.is_active);
 
   const resetForm = () => {
     setName("");
@@ -310,7 +371,17 @@ function DesignerTab({
     if (steps.length === 0) { setFormError("Add at least one step."); return; }
     for (const s of steps) {
       if (!s.name.trim()) { setFormError("All steps need a name."); return; }
-      if (s.reviewers.length === 0) { setFormError(`Step "${s.name}" needs at least one reviewer.`); return; }
+    }
+    // No reviewers is a legitimate, supported configuration (any
+    // authenticated user may act) — but it's also exactly what an
+    // accidentally-cleared checklist looks like, so confirm rather than
+    // silently accepting it or hard-blocking a deliberate open step.
+    const openSteps = steps.filter((s) => s.reviewers.length === 0);
+    if (openSteps.length > 0) {
+      const names = openSteps.map((s) => `"${s.name}"`).join(", ");
+      if (!window.confirm(`${names} ${openSteps.length === 1 ? "has" : "have"} no specific reviewers — any authenticated user will be able to act on it. Continue?`)) {
+        return;
+      }
     }
     setBusy(true);
     setFormError(null);
@@ -432,7 +503,7 @@ function DesignerTab({
                     <Icon name="close" size={13} />
                   </button>
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 2fr auto", gap: 8, alignItems: "end" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr auto", gap: 8, alignItems: "end", marginBottom: 10 }}>
                   <label style={{ margin: 0 }}>
                     <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 3 }}>Step name</span>
                     <input
@@ -444,33 +515,52 @@ function DesignerTab({
                     />
                   </label>
                   <label style={{ margin: 0 }}>
-                    <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 3 }}>Reviewers (comma-separated usernames)</span>
-                    <input
-                      required
-                      placeholder="alice, bob, carol"
-                      value={step.reviewers.join(", ")}
-                      onChange={(e) =>
-                        updateStep(i, {
-                          reviewers: e.target.value
-                            .split(",")
-                            .map((s) => s.trim())
-                            .filter(Boolean),
-                        })
-                      }
-                      style={{ width: "100%", padding: "6px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: "var(--text-sm)", boxSizing: "border-box" }}
-                    />
-                  </label>
-                  <label style={{ margin: 0 }}>
-                    <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 3 }}>Required approvals</span>
+                    <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 3 }}>
+                      Required approvals
+                    </span>
                     <input
                       type="number"
                       min={1}
                       max={step.reviewers.length || 1}
                       value={step.required_approvals}
                       onChange={(e) => updateStep(i, { required_approvals: Math.max(1, Number(e.target.value)) })}
-                      style={{ width: "100%", padding: "6px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: "var(--text-sm)", boxSizing: "border-box" }}
+                      style={{ width: 90, padding: "6px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: "var(--text-sm)", boxSizing: "border-box" }}
                     />
                   </label>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>
+                    Reviewers
+                  </span>
+                  {activeUsers.length === 0 ? (
+                    <p style={{ fontSize: 12, color: "var(--text-tertiary)", margin: 0 }}>No active users to choose from.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+                      {activeUsers.map((u) => (
+                        <label key={u.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-sm)" }}>
+                          <input
+                            type="checkbox"
+                            style={{ width: "auto" }}
+                            checked={step.reviewers.includes(u.username)}
+                            onChange={(e) =>
+                              updateStep(i, {
+                                reviewers: e.target.checked
+                                  ? [...step.reviewers, u.username]
+                                  : step.reviewers.filter((r) => r !== u.username),
+                              })
+                            }
+                          />
+                          {u.display_name || u.username}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {step.reviewers.length === 0 && (
+                    <p style={{ fontSize: 12, color: "var(--warning)", margin: "6px 0 0" }}>
+                      No one selected — any authenticated user will be able to act on this step.
+                    </p>
+                  )}
                 </div>
               </div>
             ))}

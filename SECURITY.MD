@@ -56,7 +56,7 @@ If you accidentally commit credentials:
 
 ## 📝 How to Use Environment Variables
 
-### Python (FileDrive Backend)
+### Python (C-ECM Backend)
 
 ```python
 import os
@@ -65,7 +65,7 @@ load_dotenv()
 api_key = os.getenv('IBM_CLOUD_API_KEY')
 ```
 
-### Node.js / JavaScript (FileDrive Frontend build)
+### Node.js / JavaScript (C-ECM Frontend build)
 
 ```javascript
 // Use VITE_ prefix for frontend env vars

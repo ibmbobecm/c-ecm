@@ -243,7 +243,7 @@ def void_envelope(envelope_id: str, reason: str) -> None:
     try:
         resp = requests.put(
             f"{base_uri}/restapi/v2.1/accounts/{account_id}/envelopes/{envelope_id}",
-            json={"status": "voided", "voidedReason": (reason or "Voided by FileDrive")[:200]},
+            json={"status": "voided", "voidedReason": (reason or "Voided by C-ECM")[:200]},
             headers={"Authorization": f"Bearer {token}"}, timeout=30,
         )
     except requests.RequestException as exc:

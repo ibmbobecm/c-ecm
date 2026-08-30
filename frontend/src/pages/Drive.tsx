@@ -2,22 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost, apiUpload, downloadFile, ApiError } from "../api/client";
 import { useAuth } from "../contexts/AuthContext";
 import { useConnections } from "../contexts/ConnectionsContext";
-import type { DriveItem, FileItem, FolderContents, Lock, SearchResult, SortKey, SortState, Tag, ViewMode, WorkflowDefinition } from "../types";
+import type { DriveItem, FileItem, FolderContents, Lock, SearchResult, SortKey, SortState, Tag, ViewMode, WorkflowDefinition, WorkflowInstance } from "../types";
 import { Sidebar } from "../components/Sidebar";
 import { Toolbar } from "../components/Toolbar";
 import { ItemGrid } from "../components/ItemGrid";
 import { ContextMenu, type MenuAction } from "../components/ContextMenu";
 import { TextInputDialog } from "../components/TextInputDialog";
 import { MoveDialog } from "../components/MoveDialog";
-import { VersionHistoryPanel } from "../components/VersionHistoryPanel";
-import { PreviewModal } from "../components/PreviewModal";
-import { ConnectionsPanel } from "../components/ConnectionsPanel";
+import { IntegrationsPage } from "./IntegrationsPage";
+import { AuditLogPage } from "./AuditLogPage";
+import { DocumentViewerPage, type ViewerSection } from "./DocumentViewerPage";
 import { CommandPalette, type PaletteItem } from "../components/CommandPalette";
 import { TagsDialog } from "../components/TagsDialog";
 import { CommentsPanel } from "../components/CommentsPanel";
 import { ShareLinkDialog } from "../components/ShareLinkDialog";
 import { WorkflowsPanel } from "../components/WorkflowsPanel";
-import { AiPanel } from "../components/AiPanel";
 import { ESignatureDialog } from "../components/ESignatureDialog";
 import { GlobalSearchPanel } from "../components/GlobalSearchPanel";
 import { UserManagementPanel } from "../components/UserManagementPanel";
@@ -32,7 +31,9 @@ type Flash = { type: "error" | "success"; message: string };
 export function Drive() {
   const { logout } = useAuth();
   const { connections, activeConnectionId, selectConnection, loading: connectionsLoading } = useConnections();
-  const [connectionsPanelOpen, setConnectionsPanelOpen] = useState(false);
+  const [integrationsPageOpen, setIntegrationsPageOpen] = useState(false);
+  const [auditLogOpen, setAuditLogOpen] = useState(false);
+  const [aiBackend, setAiBackend] = useState<string | undefined>(undefined);
 
   const [view, setView] = useState<ViewMode>("mine");
   const [folderId, setFolderId] = useState<string | null>(null);
@@ -48,8 +49,7 @@ export function Drive() {
   const [lastClickedId, setLastClickedId] = useState<string | null>(null);
 
   const [contextMenu, setContextMenu] = useState<{ item: DriveItem; x: number; y: number } | null>(null);
-  const [previewFile, setPreviewFile] = useState<FileItem | null>(null);
-  const [versionsFile, setVersionsFile] = useState<FileItem | null>(null);
+  const [viewer, setViewer] = useState<{ file: FileItem; section?: ViewerSection } | null>(null);
   const [renameItem, setRenameItem] = useState<DriveItem | null>(null);
   const [moveItems, setMoveItems] = useState<DriveItem[] | null>(null);
   const [newFolderOpen, setNewFolderOpen] = useState(false);
@@ -57,7 +57,6 @@ export function Drive() {
   const [tagsItem, setTagsItem] = useState<DriveItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<DriveItem | null>(null);
   const [shareItem, setShareItem] = useState<DriveItem | null>(null);
-  const [aiItem, setAiItem] = useState<FileItem | null>(null);
   const [esignItem, setEsignItem] = useState<FileItem | null>(null);
   const [requestApprovalItem, setRequestApprovalItem] = useState<DriveItem | null>(null);
   const [metadataItem, setMetadataItem] = useState<DriveItem | null>(null);
@@ -69,6 +68,8 @@ export function Drive() {
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [locksByResource, setLocksByResource] = useState<Record<string, Lock>>({});
   const [workflowDefs, setWorkflowDefs] = useState<WorkflowDefinition[]>([]);
+  const [approvalsRefreshToken, setApprovalsRefreshToken] = useState(0);
+  const [pendingApprovalsByResource, setPendingApprovalsByResource] = useState<Record<string, WorkflowInstance>>({});
   const [dragActive, setDragActive] = useState(false);
   const [flash, setFlash] = useState<Flash | null>(null);
   const [uploadStatus, setUploadStatus] = useState<{ current: number; total: number; name: string } | null>(null);
@@ -124,8 +125,40 @@ export function Drive() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeConnectionId]);
 
+  // Pending-approval badges in the grid — same idea as tagsByResource/
+  // commentCounts, but there's no bulk-by-resource-ids endpoint for this;
+  // in_review instances for the whole connection are typically few, so one
+  // list call indexed client-side is simpler than adding one. Re-runs on
+  // approvalsRefreshToken so starting/acting on a request updates badges
+  // without waiting for an unrelated navigation to trigger a refetch.
+  useEffect(() => {
+    if (!activeConnectionId) return;
+    apiGet<WorkflowInstance[]>("/workflows/instances", { status: "in_review" })
+      .then((instances) => {
+        const map: Record<string, WorkflowInstance> = {};
+        for (const inst of instances) map[inst.resource_id] = inst;
+        setPendingApprovalsByResource(map);
+      })
+      .catch(() => {});
+  }, [activeConnectionId, approvalsRefreshToken]);
+
+  // Which AI backend is active, if any -- server-wide, not per-connection,
+  // so this only needs to load once. Powers the Watson badge in AiPanel,
+  // which otherwise has no way to know what's configured server-side.
+  useEffect(() => {
+    apiGet<{ enabled: boolean; backend: string }>("/ai/status")
+      .then((s) => setAiBackend(s.enabled ? s.backend : undefined))
+      .catch(() => {});
+  }, []);
+
   const loadContents = () => {
     if (!activeConnectionId) return;
+    // The backend only knows "mine"/"trash" for this endpoint — "workflows"
+    // and "global-search" render their own self-contained panels and never
+    // needed folder contents at all, but this was still being called for
+    // every view change and hitting a 422 (visibly, as an error toast) each
+    // time someone opened Approvals or Global Search.
+    if (view !== "mine" && view !== "trash") return;
     setLoading(true);
     apiGet<FolderContents>("/folders/contents", { folder_id: view === "mine" ? folderId ?? undefined : undefined, view })
       .then((c) => {
@@ -185,7 +218,7 @@ export function Drive() {
     if (item.type === "folder") {
       goToFolder(item.id);
     } else {
-      setPreviewFile(item);
+      setViewer({ file: item });
     }
   };
 
@@ -230,6 +263,9 @@ export function Drive() {
         await apiPatch(`/files/${item.id}`, { name });
       }
       loadContents();
+      // If this file is open in the full-screen viewer, reflect the new
+      // name there immediately rather than leaving it stale until reopened.
+      setViewer((prev) => (prev && prev.file.id === item.id ? { ...prev, file: { ...prev.file, name } } : prev));
     } catch (err) {
       showError(err, "Couldn't rename that.");
     }
@@ -313,6 +349,11 @@ export function Drive() {
         comment: null,
       });
       showSuccess(`Approval requested for "${item.name}".`);
+      // The viewer's Approvals section fetches once on mount, not on a poll —
+      // if it's open for this same file, bump its remount key so the request
+      // just created actually shows up instead of waiting for a manual
+      // collapse/reopen.
+      setApprovalsRefreshToken((t) => t + 1);
     } catch (err) {
       showError(err, "Couldn't start the approval workflow.");
     }
@@ -331,17 +372,29 @@ export function Drive() {
     ];
     if (item.type === "file") {
       actions.push({ label: "Download", icon: "download", onClick: () => handleDownloadMany([item]) });
-      actions.push({ label: "Version history", icon: "list-view", onClick: () => setVersionsFile(item) });
+      actions.push({ label: "Version history", icon: "list-view", onClick: () => setViewer({ file: item, section: "versions" }) });
     }
 
     actions.push({ label: "Rename", icon: "rename", onClick: () => setRenameItem(item) });
     actions.push({ label: "Move", icon: "move", onClick: () => setMoveItems([item]) });
-    actions.push({ label: "Get link", icon: "link", onClick: () => setShareItem(item), separatorBefore: true });
-    actions.push({ label: "Tags", icon: "tag", onClick: () => setTagsItem(item) });
-    actions.push({ label: "Comments", icon: "message", onClick: () => setCommentsItem(item) });
-    actions.push({ label: "Set Metadata", icon: "tag", onClick: () => setMetadataItem(item) });
+    actions.push({
+      label: "Get link", icon: "link", separatorBefore: true,
+      onClick: () => (item.type === "file" ? setViewer({ file: item, section: "share" }) : setShareItem(item)),
+    });
+    actions.push({
+      label: "Tags", icon: "tag",
+      onClick: () => (item.type === "file" ? setViewer({ file: item, section: "tags" }) : setTagsItem(item)),
+    });
+    actions.push({
+      label: "Comments", icon: "message",
+      onClick: () => (item.type === "file" ? setViewer({ file: item, section: "comments" }) : setCommentsItem(item)),
+    });
+    actions.push({
+      label: "Set Metadata", icon: "tag",
+      onClick: () => (item.type === "file" ? setViewer({ file: item, section: "properties" }) : setMetadataItem(item)),
+    });
     if (item.type === "file") {
-      actions.push({ label: "AI Insights", icon: "star", onClick: () => setAiItem(item) });
+      actions.push({ label: "AI Insights", icon: "star", onClick: () => setViewer({ file: item, section: "ai" }) });
       actions.push({ label: "Send for signature", icon: "signature", onClick: () => setEsignItem(item) });
     }
     // "Request Approval" appears when at least one workflow definition exists
@@ -509,6 +562,14 @@ export function Drive() {
       </div>
     ) : null;
 
+  if (integrationsPageOpen) {
+    return <IntegrationsPage onBack={() => setIntegrationsPageOpen(false)} />;
+  }
+
+  if (auditLogOpen) {
+    return <AuditLogPage onBack={() => setAuditLogOpen(false)} />;
+  }
+
   return (
     <div
       className="drive-app"
@@ -530,11 +591,12 @@ export function Drive() {
         onNewFolder={() => setNewFolderOpen(true)}
         onUploadClick={() => fileInputRef.current?.click()}
         uploading={!!uploadStatus}
-        onManageConnections={() => setConnectionsPanelOpen(true)}
+        onOpenIntegrations={() => setIntegrationsPageOpen(true)}
         onOpenUsers={() => setUsersOpen(true)}
         onOpenDocClasses={() => setDocClassesOpen(true)}
         onOpenWebhooks={() => setWebhooksOpen(true)}
         onOpenRetention={() => setRetentionOpen(true)}
+        onOpenAuditLog={() => setAuditLogOpen(true)}
         onLogout={logout}
       />
 
@@ -577,11 +639,29 @@ export function Drive() {
           <GlobalSearchPanel
             onSelectHit={(hit) => {
               // Switch to the connection the hit belongs to, then navigate
+              // straight to the result. A trailing goToView("mine") used to
+              // run unconditionally after goToFolder — goToView resets
+              // folderId back to null, so a folder hit always landed back
+              // at the connection root instead of the folder just clicked.
+              // File hits never opened anything at all: there was no
+              // setViewer call in this branch.
               selectConnection(hit.connection_id);
               if (hit.resource_type === "folder") {
                 goToFolder(hit.resource_id);
+              } else {
+                setViewer({
+                  file: {
+                    type: "file",
+                    id: hit.resource_id,
+                    name: hit.name,
+                    folder_id: null,
+                    version_number: 1,
+                    size_bytes: hit.size_bytes,
+                    content_type: hit.content_type,
+                    updated_at: hit.updated_at,
+                  },
+                });
               }
-              goToView("mine");
             }}
           />
         ) : !connectionsLoading && !activeConnectionId ? (
@@ -591,7 +671,7 @@ export function Drive() {
             </div>
             <h3>No backend connected yet</h3>
             <p>Connect FileNet, Google Drive, S3, or another backend to start browsing.</p>
-            <button className="btn-primary" onClick={() => setConnectionsPanelOpen(true)}>
+            <button className="btn-primary" onClick={() => setIntegrationsPageOpen(true)}>
               Add a connection
             </button>
           </div>
@@ -606,6 +686,7 @@ export function Drive() {
             layout={layout}
             tagsByResource={tagsByResource}
             commentCounts={commentCounts}
+            pendingApprovalsByResource={pendingApprovalsByResource}
             locksByResource={locksByResource}
             selectedIds={selectedIds}
             sort={sort}
@@ -673,24 +754,34 @@ export function Drive() {
         <MoveDialog items={moveItems} onClose={() => setMoveItems(null)} onMove={(target) => handleMoveMany(moveItems, target)} />
       )}
 
-      {versionsFile && (
-        <VersionHistoryPanel
-          file={versionsFile}
-          canEdit
-          onClose={() => setVersionsFile(null)}
-          onRestored={loadContents}
+      {viewer && (
+        <DocumentViewerPage
+          file={viewer.file}
+          initialSection={viewer.section}
+          aiBackend={aiBackend}
+          connectionName={connections.find((c) => c.id === activeConnectionId)?.display_name}
+          onClose={() => setViewer(null)}
+          onDownload={() => downloadFile(`/files/${viewer.file.id}/download`, viewer.file.name)}
+          onResourceChanged={() => loadResourceMeta([viewer.file])}
+          onVersionsRestored={loadContents}
+          onRename={() => setRenameItem(viewer.file)}
+          onMove={() => setMoveItems([viewer.file])}
+          onDelete={async () => {
+            // Wait for the delete (and the grid reload it triggers) to finish
+            // before closing — otherwise the viewer closes onto the *old*
+            // grid state, and the file briefly still being there reads as
+            // the delete having silently failed.
+            await handleTrashMany([viewer.file]);
+            setViewer(null);
+          }}
+          onSendForSignature={() => setEsignItem(viewer.file)}
+          canRequestApproval={workflowDefs.length > 0}
+          onRequestApproval={() => setRequestApprovalItem(viewer.file)}
+          workflowDefs={workflowDefs}
+          approvalsRefreshToken={approvalsRefreshToken}
+          onApprovalsChanged={() => setApprovalsRefreshToken((t) => t + 1)}
         />
       )}
-
-      {previewFile && (
-        <PreviewModal
-          file={previewFile}
-          onClose={() => setPreviewFile(null)}
-          onDownload={() => downloadFile(`/files/${previewFile.id}/download`, previewFile.name)}
-        />
-      )}
-
-      {connectionsPanelOpen && <ConnectionsPanel onClose={() => setConnectionsPanelOpen(false)} />}
 
       {paletteOpen && <CommandPalette items={paletteItems} onClose={() => setPaletteOpen(false)} />}
 
@@ -705,22 +796,6 @@ export function Drive() {
       {shareItem && <ShareLinkDialog item={shareItem} onClose={() => setShareItem(null)} />}
 
       {esignItem && <ESignatureDialog file={esignItem} onClose={() => setEsignItem(null)} />}
-
-      {aiItem && (
-        <div className="modal-overlay" onMouseDown={() => setAiItem(null)}>
-          <div className="modal-card" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 520 }}>
-            <div className="modal-header">
-              <h2>AI Insights — {aiItem.name}</h2>
-              <button className="modal-close" onClick={() => setAiItem(null)} aria-label="Close">
-                <Icon name="close" size={18} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <AiPanel file={aiItem} />
-            </div>
-          </div>
-        </div>
-      )}
 
       {usersOpen && <UserManagementPanel onClose={() => setUsersOpen(false)} />}
       {docClassesOpen && <DocumentClassesPanel onClose={() => setDocClassesOpen(false)} />}

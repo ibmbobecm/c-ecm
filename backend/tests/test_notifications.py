@@ -21,6 +21,15 @@ def test_mark_read_and_mark_all_read(client, conn_headers, uploaded_file, auth_h
     assert after_all["notifications"] == []
 
 
+def test_notification_message_names_the_connection(client, conn_headers, uploaded_file, auth_headers, local_connection):
+    # Multiple connections can exist at once, so a bare "admin created
+    # hello.txt" doesn't say which backend it happened on -- the message
+    # must name the connection.
+    body = client.get("/notifications", headers=auth_headers).json()
+    target = next(n for n in body["notifications"] if "hello.txt" in n["message"])
+    assert local_connection["display_name"] in target["message"]
+
+
 def test_routine_read_events_are_not_notifiable(client, conn_headers, uploaded_file, auth_headers):
     # Downloading/viewing a file logs no activity event at all today, so it
     # must not spam a notification either.

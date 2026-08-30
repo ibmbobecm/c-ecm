@@ -1,15 +1,15 @@
-"""FileDrive's own share-link registry — the default (and, for now, only)
+"""C-ECM's own share-link registry — the default (and, for now, only)
 implementation behind StorageProvider.create_share_link()/list_share_links()/
 revoke_share_link(). None of the nine backends' native sharing is called
 here; this works identically for all of them because it's built entirely
 on operations every provider already implements (get_file/get_content),
-fronted by a token FileDrive itself issues and resolves. A provider can
+fronted by a token C-ECM itself issues and resolves. A provider can
 still override the three methods on StorageProvider if it later wants to
 hand back a real backend-hosted link instead — this module doesn't need to
 know or care if that happens.
 
 The public, unauthenticated GET /share/{token} route (routers/sharing.py)
-is the only thing that reads this table without a FileDrive login — that
+is the only thing that reads this table without a C-ECM login — that
 route's whole job is to turn a valid, unexpired token back into
 (connection_id, resource_id) and then make the ordinary authenticated
 provider calls on the visitor's behalf.
@@ -33,6 +33,7 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
     return conn
 
 

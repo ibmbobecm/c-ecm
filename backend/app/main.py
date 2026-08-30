@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import (
     activity_service,
+    ai_service,
     comments_store,
     connections_store,
     esignature_store,
@@ -73,6 +74,11 @@ async def lifespan(app: FastAPI):
     retention_store.init_db()
     esignature_store.init_db()
 
+    # Picks up any AI/Watson settings saved via Admin Settings on a previous
+    # run — otherwise a restart would silently fall back to whatever's in
+    # the environment, discarding what was configured through the UI.
+    ai_service.refresh_from_settings()
+
     # Observer wiring — notification_service and webhook_service both react
     # to activity events.  Each is registered once so routers never need to
     # know they exist.
@@ -99,11 +105,26 @@ async def lifespan(app: FastAPI):
     logger.info("Retention scheduler stopped")
 
 
-app = FastAPI(title="FileDrive", lifespan=lifespan)
+app = FastAPI(title="C-ECM", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5174", "http://127.0.0.1:5174"],
+    # A plain allowlist can't name every LAN IP/hostname this dev server
+    # might be reached at, so match any http origin on the frontend's dev
+    # port instead of hardcoding localhost/127.0.0.1 only — but the previous
+    # pattern (`http://[^/]+:5174`) matched *any* hostname whatsoever, not
+    # just LAN ones as this comment claims: a page served from any public
+    # domain on port 5174 (an attacker's own server, port-forwarded or
+    # otherwise) would satisfy it and be granted CORS access. Scoped down to
+    # loopback + the three private-network ranges (RFC 1918) actually
+    # reachable from a LAN, which is what this was meant to allow.
+    allow_origin_regex=(
+        r"http://(localhost|127\.0\.0\.1|"
+        r"10(?:\.\d{1,3}){3}|"
+        r"172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|"
+        r"192\.168(?:\.\d{1,3}){2}"
+        r"):5174"
+    ),
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
     allow_headers=["*"],
 )
@@ -122,6 +143,7 @@ app.include_router(admin.router)
 app.include_router(folders.router)
 app.include_router(files.router)
 app.include_router(ai.router)
+app.include_router(ai.status_router)
 app.include_router(search.router)
 app.include_router(activity.router)
 app.include_router(tags.router)

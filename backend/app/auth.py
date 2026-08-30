@@ -1,4 +1,4 @@
-"""FileDrive authentication — multi-user JWT sessions with role-based access control.
+"""C-ECM authentication — multi-user JWT sessions with role-based access control.
 
 Login flow:
   1. POST /auth/login  →  validate against users_store  →  JWT + session id
@@ -24,7 +24,7 @@ import jwt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import connections_store, users_store
+from . import activity_service, connections_store, users_store
 from .config import JWT_ALGORITHM, JWT_EXPIRE_MINUTES, JWT_SECRET
 from .storage_providers.base import ProviderError, StorageProvider
 from .storage_providers.registry import get_provider
@@ -80,12 +80,20 @@ class CurrentSession:
     user: dict = field(default_factory=dict)
 
 
+def _log_auth_event(event_type: str, username: str, user_id: str | None = None) -> None:
+    activity_service.record_event(
+        connection_id=None, provider_key=None, resource_type="user", resource_id=user_id or username,
+        resource_name=username, event_type=event_type, actor=username,
+    )
+
+
 def app_login(username: str, password: str) -> tuple[str, dict]:
     """Returns (jwt_token, user_dict) or raises HTTPException."""
     _check_login_rate_limit(username)
     user = users_store.authenticate(username, password)
     if user is None:
         _record_failed_login(username)
+        _log_auth_event("login_failed", username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     _clear_login_attempts(username)
     import secrets
@@ -93,7 +101,14 @@ def app_login(username: str, password: str) -> tuple[str, dict]:
     with _app_sessions_lock:
         _app_sessions[session_id] = user["username"]
     token = _create_token(session_id)
+    _log_auth_event("login", user["username"], user["id"])
     return token, user
+
+
+def app_logout(session_id: str, username: str) -> None:
+    with _app_sessions_lock:
+        _app_sessions.pop(session_id, None)
+    _log_auth_event("logout", username)
 
 
 def _create_token(session_id: str) -> str:
@@ -116,7 +131,7 @@ def _decode_token(credentials: HTTPAuthorizationCredentials) -> str:
 
 
 def get_app_session(credentials: HTTPAuthorizationCredentials = Depends(_security)) -> str:
-    """Validates the FileDrive login.  Returns session_id."""
+    """Validates the C-ECM login.  Returns session_id."""
     session_id = _decode_token(credentials)
     with _app_sessions_lock:
         valid = session_id in _app_sessions

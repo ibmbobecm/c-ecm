@@ -1,5 +1,5 @@
 """Admin-level settings: OAuth app credentials (client id/secret) that this
-whole FileDrive deployment registers ONE of with Google/Microsoft/Box —
+whole C-ECM deployment registers ONE of with Google/Microsoft/Box —
 unlike per-connection details (a FileNet server, an Alfresco URL), an OAuth
 app is inherently shared by every connection to that provider, the same way
 a Slack or Zapier install has one registered Google app that all its users
@@ -20,16 +20,19 @@ def _conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(_DB_PATH))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
+    # CREATE TABLE IF NOT EXISTS is cheap and idempotent -- doing it on every
+    # connect (not just in init_db()) means callers that don't go through the
+    # FastAPI app/lifespan (e.g. ai_service.py's settings refresh, called from
+    # plain unit tests) can't hit "no such table: settings" just because
+    # init_db() happened to not run first in that context.
+    conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     return conn
 
 
 def init_db() -> None:
     conn = _conn()
-    try:
-        conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
-        conn.commit()
-    finally:
-        conn.close()
+    conn.close()
 
 
 def get_setting(key: str, default: str = "") -> str:
