@@ -158,7 +158,8 @@ Every change was checked against a live 217-test backend suite and a production 
 **5. Architecture-level judgment**
 When asked for a production-readiness audit, Bob gave an honest, non-inflated assessment of what a single-process/SQLite deployment can and cannot support at scale — the kind of judgment the hackathon's *Completeness and feasibility* criterion is explicitly looking for.
 
-> *(Attach each team member's exported IBM Bob task-session summary screenshots in `/docs/bob-sessions/` before submitting — see Submission Checklist below.)*
+> Full session evidence — **5 official IBM Bob task export JSON files (981 total messages)**, SHA-256 hashes, session narrative, and an attribution boundary — is documented in [`docs/bob-sessions/README.md`](docs/bob-sessions/README.md).
+> The raw task export files are in [`bob-task/`](bob-task/) at the repository root.
 
 ---
 
@@ -271,8 +272,14 @@ filenet-drive/
 │   │   ├── icons/               # Inline SVG icon system
 │   │   └── types.ts             # TypeScript type definitions
 │   └── package.json
+├── bob-task/                    # Official IBM Bob task export JSON files (5 sessions, 981 messages)
+│   ├── bob-task-018fc7683ce67500f63ad69ae586d042-2026-08-30.json  (CECM-01, 95 msgs)
+│   ├── bob-task-d43365e0d43c8cd048cf49c5453527a3-2026-08-30.json  (CECM-02, 533 msgs)
+│   ├── bob-task-69110673e0fd0dfce655ae2b111e830b-2026-08-30.json  (CECM-03, 152 msgs)
+│   ├── bob-task-e365ac58a76e97da16af2325ea61fea2-2026-08-30.json  (CECM-04, 124 msgs)
+│   └── bob-task-6e8ecfca658e8beba0ff359383390305-2026-08-30.json  (CECM-05, 77 msgs)
 ├── docs/
-│   └── bob-sessions/            # IBM Bob task-session summary screenshots (add before submitting)
+│   └── bob-sessions/            # IBM Bob session evidence index with SHA-256 hashes
 ├── h-doc/                       # Hackathon official PDFs (read by IBM Bob for criteria alignment)
 ├── .env.example                 # Environment variable template
 ├── .gitignore                   # Prevents credential commits
