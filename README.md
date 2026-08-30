@@ -158,7 +158,7 @@ Every change was checked against a live 217-test backend suite and a production 
 **5. Architecture-level judgment**
 When asked for a production-readiness audit, Bob gave an honest, non-inflated assessment of what a single-process/SQLite deployment can and cannot support at scale — the kind of judgment the hackathon's *Completeness and feasibility* criterion is explicitly looking for.
 
-> *(Attach each team member's exported IBM Bob task-session summary screenshots in `/docs/bob-sessions/` before submitting — see Submission Checklist below.)*
+> Full session evidence — task exports (JSON), session screenshots, SHA-256 hashes, and an attribution boundary — is documented in [`docs/bob-sessions/README.md`](docs/bob-sessions/README.md).
 
 ---
 
