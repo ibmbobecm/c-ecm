@@ -1,4 +1,4 @@
-# C-ECM — Centralized Enterprise Content Management
+# C-ECM Centralized Enterprise Content Management
 
 > **IBM TechXchange 2026 Pre-conference Dev Day Hackathon** | Theme: *Build with purpose using IBM Bob 2.0*
 > Built end-to-end with an agentic AI coding assistant (IBM Bob 2.0) — Agent mode, parallel subagents, and document understanding, managing the entire application-maintenance and release-governance workflow described below.
