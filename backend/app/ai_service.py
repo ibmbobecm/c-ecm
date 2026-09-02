@@ -119,8 +119,24 @@ def refresh_from_settings() -> None:
 # Text extraction
 # ---------------------------------------------------------------------------
 
-def extract_text(content: bytes, content_type: str | None, filename: str) -> str:
-    """Return up to _MAX_CONTEXT_CHARS of plain text from a document."""
+def extract_text(content: bytes, content_type: str | None, filename: str, max_chars: int = _MAX_CONTEXT_CHARS) -> str:
+    """Return up to max_chars of plain text from a document (defaulting to
+    _MAX_CONTEXT_CHARS, sized for this module's own single-document Q&A/
+    classify/summarize callers — a caller assembling a multi-file knowledge
+    base under its own larger total budget, like ai_agents_service, should
+    pass that budget through here instead of accepting this default,
+    otherwise a single file can never contribute more than a limit sized
+    for a completely different use case).
+
+    PDF/DOCX/XLSX are binary container formats — decoding their raw bytes
+    as UTF-8 produces garbage (PDF structure/stream bytes, ZIP-compressed
+    XML, ...) that *looks* like text but isn't, and an LLM handed that
+    garbage will confidently answer from it anyway. So for these three
+    formats, a missing or failing parser library must fall through to
+    "no readable text" rather than to the generic raw-byte decode below —
+    silently mistaking one for the other is far worse than surfacing an
+    empty knowledge base, since a plausible-looking wrong answer erodes
+    trust more than an honest "no answer"."""
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
 
     # PDF
@@ -133,20 +149,22 @@ def extract_text(content: bytes, content_type: str | None, filename: str) -> str
                     t = page.extract_text()
                     if t:
                         parts.append(t)
-                        if sum(len(p) for p in parts) > _MAX_CONTEXT_CHARS:
+                        if sum(len(p) for p in parts) > max_chars:
                             break
-                return "\n".join(parts)[:_MAX_CONTEXT_CHARS]
+                return "\n".join(parts)[:max_chars]
         except Exception:
-            pass
+            logger.warning("PDF text extraction failed for %s (pdfplumber missing or unreadable file)", filename)
+            return ""
 
     # DOCX
     if content_type in ("application/vnd.openxmlformats-officedocument.wordprocessingml.document",) or ext == "docx":
         try:
             from docx import Document as DocxDocument  # type: ignore
             doc = DocxDocument(io.BytesIO(content))
-            return "\n".join(p.text for p in doc.paragraphs if p.text)[:_MAX_CONTEXT_CHARS]
+            return "\n".join(p.text for p in doc.paragraphs if p.text)[:max_chars]
         except Exception:
-            pass
+            logger.warning("DOCX text extraction failed for %s (python-docx missing or unreadable file)", filename)
+            return ""
 
     # XLSX (simple: join all cell text)
     if ext in ("xlsx", "xls") or "spreadsheet" in (content_type or ""):
@@ -157,15 +175,16 @@ def extract_text(content: bytes, content_type: str | None, filename: str) -> str
             for sheet in wb.worksheets:
                 for row in sheet.iter_rows(values_only=True):
                     parts.append(" ".join(str(c) for c in row if c is not None))
-                    if sum(len(p) for p in parts) > _MAX_CONTEXT_CHARS:
+                    if sum(len(p) for p in parts) > max_chars:
                         break
-            return "\n".join(parts)[:_MAX_CONTEXT_CHARS]
+            return "\n".join(parts)[:max_chars]
         except Exception:
-            pass
+            logger.warning("XLSX text extraction failed for %s (openpyxl missing or unreadable file)", filename)
+            return ""
 
     # Plain text, CSV, code, JSON, XML, etc.
     try:
-        return content.decode("utf-8", errors="replace")[:_MAX_CONTEXT_CHARS]
+        return content.decode("utf-8", errors="replace")[:max_chars]
     except Exception:
         return ""
 
@@ -175,6 +194,10 @@ def extract_text(content: bytes, content_type: str | None, filename: str) -> str
 # ---------------------------------------------------------------------------
 
 def _call_openai_compatible(prompt: str) -> str:
+    return _call_openai_compatible_with_usage(prompt)[0]
+
+
+def _call_openai_compatible_with_usage(prompt: str, max_tokens: int = 512) -> tuple[str, int | None]:
     try:
         import requests as _requests  # type: ignore
         headers = {"Content-Type": "application/json"}
@@ -185,17 +208,20 @@ def _call_openai_compatible(prompt: str) -> str:
             json={
                 "model": _AI_MODEL,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 512,
+                "max_tokens": max_tokens,
                 "temperature": 0.2,
             },
             headers=headers,
             timeout=30,
         )
         resp.raise_for_status()
-        return resp.json()["choices"][0]["message"]["content"].strip()
+        data = resp.json()
+        text = data["choices"][0]["message"]["content"].strip()
+        tokens = data.get("usage", {}).get("total_tokens")
+        return text, tokens
     except Exception as exc:
         logger.warning("OpenAI call failed: %s", exc)
-        return ""
+        return "", None
 
 
 def _call_ollama(prompt: str) -> str:
@@ -263,6 +289,10 @@ def _call_watsonx(prompt: str) -> str:
     GET .../ml/v1/foundation_model_specs) will show what's actually
     available for the configured account.
     """
+    return _call_watsonx_with_usage(prompt)[0]
+
+
+def _call_watsonx_with_usage(prompt: str, max_tokens: int = 512) -> tuple[str, int | None]:
     try:
         import requests as _requests  # type: ignore
         token = _get_iam_token()
@@ -271,7 +301,7 @@ def _call_watsonx(prompt: str) -> str:
             "model_id": _WATSONX_MODEL,
             "messages": [{"role": "user", "content": prompt}],
             "project_id": _WATSONX_PROJECT_ID,
-            "max_tokens": 512,
+            "max_tokens": max_tokens,
             "temperature": 0.2,
         }
         resp = _requests.post(
@@ -281,11 +311,14 @@ def _call_watsonx(prompt: str) -> str:
             timeout=60,
         )
         resp.raise_for_status()
-        choices = resp.json().get("choices", [])
-        return choices[0].get("message", {}).get("content", "").strip() if choices else ""
+        data = resp.json()
+        choices = data.get("choices", [])
+        text = choices[0].get("message", {}).get("content", "").strip() if choices else ""
+        tokens = data.get("usage", {}).get("total_tokens")
+        return text, tokens
     except Exception as exc:
         logger.warning("watsonx.ai call failed: %s", exc)
-        return ""
+        return "", None
 
 
 # --------------- Watson NLU (classification only) --------------------------
@@ -412,6 +445,42 @@ def _llm(prompt: str) -> str:
         # a generative answer is needed. Return empty if neither is available.
         return ""
     return ""
+
+
+def _estimate_tokens(*texts: str) -> int:
+    """Rough token-count estimate (~4 chars/token, a widely-used
+    approximation for English text) used only when a backend's own API
+    response doesn't report real usage (Ollama's /api/generate doesn't;
+    OpenAI-compatible and watsonx.ai chat endpoints do). Callers must
+    treat this as an estimate, not a billed figure."""
+    return max(1, sum(len(t) for t in texts) // 4)
+
+
+def llm_with_usage(prompt: str, max_tokens: int = 512) -> tuple[str, int | None, bool]:
+    """Like _llm(), but also returns (tokens_used, is_estimated) — real
+    usage from the backend's own response when it reports one, otherwise a
+    length-based estimate. Public (no leading underscore): used by
+    ai_agents_service for agent-chat token accounting, unlike the plain
+    text-only _llm() the single-document summarize/classify/ask paths use.
+
+    max_tokens defaults to a short chat-answer length; callers asking for
+    a much longer structured response (e.g. drafting a whole site's worth
+    of copy) must raise it explicitly — a truncated response cuts off
+    mid-JSON and fails to parse rather than merely reading short."""
+    if _BACKEND == "openai":
+        text, tokens = _call_openai_compatible_with_usage(prompt, max_tokens=max_tokens)
+        if tokens is not None:
+            return text, tokens, False
+        return text, (_estimate_tokens(prompt, text) if text else None), True
+    if _BACKEND == "watsonx":
+        text, tokens = _call_watsonx_with_usage(prompt, max_tokens=max_tokens)
+        if tokens is not None:
+            return text, tokens, False
+        return text, (_estimate_tokens(prompt, text) if text else None), True
+    if _BACKEND == "ollama":
+        text = _call_ollama(prompt)
+        return text, (_estimate_tokens(prompt, text) if text else None), True
+    return "", None, True
 
 
 def is_enabled() -> bool:

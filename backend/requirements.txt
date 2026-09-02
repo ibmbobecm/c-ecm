@@ -11,10 +11,13 @@ boto3==1.43.80
 azure-storage-blob==12.30.0
 bcrypt==4.2.1
 apscheduler==3.11.0
-# Optional AI/preview dependencies — install as needed:
-# pdfplumber>=0.10  (PDF text extraction)
-# python-docx>=1.1  (DOCX text extraction)
-# openpyxl>=3.1     (XLSX text extraction)
+pdfplumber==0.11.10    # PDF text extraction for AI Q&A / classification / AI Agents knowledge bases
+python-docx==1.2.0     # DOCX text extraction (same callers as above)
+openpyxl==3.1.5        # XLSX text extraction (same callers as above)
+bleach==6.4.0           # server-side allowlist HTML sanitizer for admin-authored rich-text content
+Pillow==12.3.0          # verifies uploaded image files are genuine images (AI Agents pencil-editor image uploads)
+python3-saml==1.16.0    # SAML SSO login (pulls in xmlsec, which has a prebuilt Windows wheel — verified working)
+cryptography==50.0.1    # generates the SP's self-signed signing cert for SAML (already a transitive dep; pinned explicitly since it's imported directly now)
 
 # Optional IBM i / IBM Z connector dependencies — install as needed:
 # paramiko>=3.4      (IBM i IFS access via SFTP)

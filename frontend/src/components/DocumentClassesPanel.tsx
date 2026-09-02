@@ -1,16 +1,13 @@
 /**
- * DocumentClassesPanel — manage document classes (schemas) and view / edit
- * metadata values on individual files.
+ * DocumentClassesPanel — the "Set Metadata" modal for one file/folder:
+ * assign it a document class and fill in that class's field values.
  *
- * Two modes:
- *   1. No `resourceId` prop → shows the global list of document classes
- *      (admin view to create / delete classes).
- *   2. With `resourceId` prop → shows the metadata editor for that resource
- *      so users can assign a class and fill in field values.
+ * The admin view for managing classes themselves lives in the Settings
+ * page as its own tab (ClassListView, exported from this same file).
  */
 import { useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost, apiPut, ApiError } from "../api/client";
-import type { DocumentClass, MetadataFieldDef, ResourceMetadata } from "../types";
+import type { DocumentClass, MetadataFieldDef, ResourceMetadata, ResourceMetadataHistoryEntry } from "../types";
 import { Modal } from "./Modal";
 import { Icon } from "../icons";
 import { formatDate } from "../utils";
@@ -22,9 +19,19 @@ function FieldTypeLabel({ type }: { type: MetadataFieldDef["type"] }) {
   return <span className="muted" style={{ fontSize: 11 }}>{labels[type] ?? type}</span>;
 }
 
+// Unlike formatDate (which collapses today's entries to just a time — fine
+// for a single "last modified" stamp), a history list can hold several
+// entries from the same day, so every row needs both the date and the time
+// to stay distinguishable.
+function formatDateTime(iso: string): string {
+  const hasTz = /(Z|[+-]\d{2}:\d{2})$/.test(iso);
+  const d = new Date(hasTz ? iso : iso + "Z");
+  return d.toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 // ---------- Class list (admin) -----------------------------------------------
 
-function ClassListView({ onClose }: { onClose: () => void }) {
+export function ClassListView() {
   const [classes, setClasses] = useState<DocumentClass[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -96,7 +103,7 @@ function ClassListView({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Modal title="Document Classes" onClose={onClose} width={600}>
+    <div className="settings-tab-pane">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
         <span className="muted" style={{ fontSize: 13 }}>{classes.length} class{classes.length !== 1 ? "es" : ""}</span>
         <button className="btn-primary" style={{ fontSize: 13 }} onClick={() => setShowCreate((s) => !s)}>
@@ -189,11 +196,50 @@ function ClassListView({ onClose }: { onClose: () => void }) {
           ))}
         </div>
       )}
-    </Modal>
+    </div>
   );
 }
 
 // ---------- Metadata editor (per resource) -----------------------------------
+
+function formatFieldValue(field: MetadataFieldDef, raw: unknown): string {
+  if (raw === undefined || raw === null || raw === "") return "—";
+  if (field.type === "boolean") return raw ? "Yes" : "No";
+  if (field.type === "date") return formatDate(String(raw)) || "—";
+  return String(raw);
+}
+
+function classLabel(classId: string | null, classes: DocumentClass[]): string {
+  if (!classId) return "— None —";
+  return classes.find((c) => c.id === classId)?.name ?? "Unknown class";
+}
+
+// One row per thing that actually changed in a history entry — the class
+// itself (if reassigned) plus each field whose value differs, resolving
+// each field's label/type against whichever class (new, falling back to
+// old) still defines that key so a label survives even after a class is
+// later edited or deleted.
+function diffEntry(entry: ResourceMetadataHistoryEntry, classes: DocumentClass[]): { label: string; before: string; after: string }[] {
+  const rows: { label: string; before: string; after: string }[] = [];
+  if (entry.old_class_id !== entry.new_class_id) {
+    rows.push({ label: "Document class", before: classLabel(entry.old_class_id, classes), after: classLabel(entry.new_class_id, classes) });
+  }
+  const newClass = classes.find((c) => c.id === entry.new_class_id);
+  const oldClass = classes.find((c) => c.id === entry.old_class_id);
+  const keys = new Set([...Object.keys(entry.old_values), ...Object.keys(entry.new_values)]);
+  for (const key of keys) {
+    const before = entry.old_values[key];
+    const after = entry.new_values[key];
+    if (JSON.stringify(before) === JSON.stringify(after)) continue;
+    const field = newClass?.fields.find((f) => f.key === key) ?? oldClass?.fields.find((f) => f.key === key);
+    rows.push({
+      label: field?.label ?? key,
+      before: field ? formatFieldValue(field, before) : String(before ?? "—"),
+      after: field ? formatFieldValue(field, after) : String(after ?? "—"),
+    });
+  }
+  return rows;
+}
 
 export function MetadataEditorContent({
   resourceId,
@@ -204,42 +250,64 @@ export function MetadataEditorContent({
 }) {
   const [classes, setClasses] = useState<DocumentClass[]>([]);
   const [meta, setMeta] = useState<ResourceMetadata | null>(null);
+  const [history, setHistory] = useState<ResourceMetadataHistoryEntry[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [selectedClassId, setSelectedClassId] = useState<string>("");
   const [values, setValues] = useState<Record<string, unknown>>({});
+  const [applyToChildren, setApplyToChildren] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState<string | null>(null);
+  // Whether a class is already assigned decides the initial mode: nothing
+  // to look at yet jumps straight to picking one, otherwise show the
+  // read-only summary (matching the rest of Properties) behind a pencil.
+  const [editing, setEditing] = useState(false);
+
+  const reloadHistory = () =>
+    apiGet<ResourceMetadataHistoryEntry[]>(`/metadata/resource/${resourceId}/history?resource_type=${resourceType}`).then(setHistory).catch(() => {});
 
   useEffect(() => {
     Promise.all([
       apiGet<DocumentClass[]>("/metadata/classes"),
-      apiGet<ResourceMetadata | null>(`/metadata/resource/${resourceId}`).catch(() => null),
-    ]).then(([cls, m]) => {
+      apiGet<ResourceMetadata | null>(`/metadata/resource/${resourceId}?resource_type=${resourceType}`).catch(() => null),
+      apiGet<ResourceMetadataHistoryEntry[]>(`/metadata/resource/${resourceId}/history?resource_type=${resourceType}`).catch(() => []),
+    ]).then(([cls, m, hist]) => {
       setClasses(cls);
       if (m) {
         setMeta(m);
         setSelectedClassId(m.class_id ?? "");
         setValues(m.values ?? {});
       }
+      setHistory(hist);
+      setEditing(!m?.class_id);
     }).catch((e) => setError(e instanceof ApiError ? e.message : "Failed to load metadata."))
       .finally(() => setLoading(false));
   }, [resourceId]);
 
   const activeClass = classes.find((c) => c.id === selectedClassId);
+  const savedClass = classes.find((c) => c.id === meta?.class_id);
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    setSaved(false);
+    setSaved(null);
     try {
-      await apiPut(`/metadata/resource/${resourceId}`, {
+      const updated = await apiPut<ResourceMetadata>(`/metadata/resource/${resourceId}`, {
         resource_type: resourceType,
         class_id: selectedClassId || null,
         values,
+        apply_to_children: resourceType === "folder" ? applyToChildren : undefined,
       });
-      setSaved(true);
+      setMeta(updated);
+      setSaved(
+        updated.applied_to_count
+          ? `Saved — also applied to ${updated.applied_to_count} item${updated.applied_to_count === 1 ? "" : "s"} inside this folder.`
+          : "Saved."
+      );
+      setEditing(false);
+      reloadHistory();
     } catch (e) {
       setError(e instanceof ApiError ? e.message : "Couldn't save metadata.");
     } finally {
@@ -249,62 +317,142 @@ export function MetadataEditorContent({
 
   const setFieldValue = (key: string, val: unknown) => setValues((prev) => ({ ...prev, [key]: val }));
 
+  const cancelEdit = () => {
+    setSelectedClassId(meta?.class_id ?? "");
+    setValues(meta?.values ?? {});
+    setApplyToChildren(false);
+    setError(null);
+    setEditing(false);
+  };
+
+  if (loading) return <p className="muted">Loading…</p>;
+
+  if (!editing) {
+    return (
+      <div className="viewer-metadata-view">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Document class</span>
+          <button type="button" className="icon-btn" title="Edit metadata" aria-label="Edit metadata" onClick={() => setEditing(true)}>
+            <Icon name="rename" size={14} />
+          </button>
+        </div>
+        {saved && <div className="auth-success" style={{ marginTop: 6 }}>{saved}</div>}
+        {savedClass ? (
+          <dl className="viewer-properties-list" style={{ marginTop: 6 }}>
+            <dt>Class</dt>
+            <dd>{savedClass.name}</dd>
+            {savedClass.fields.map((f) => (
+              <div key={f.key} style={{ display: "contents" }}>
+                <dt>{f.label}</dt>
+                <dd>{formatFieldValue(f, meta?.values?.[f.key])}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>No document class assigned.</p>
+        )}
+
+        {history.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="link-btn"
+              style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 4 }}
+              onClick={() => setHistoryOpen((o) => !o)}
+            >
+              <Icon name={historyOpen ? "chevron-down" : "chevron-right"} size={12} />
+              History ({history.length})
+            </button>
+            {historyOpen && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 8 }}>
+                {history.map((h) => {
+                  const rows = diffEntry(h, classes);
+                  return (
+                    <div key={h.id} style={{ borderLeft: "2px solid var(--border)", paddingLeft: 10 }}>
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        {formatDateTime(h.changed_at)}{h.changed_by ? ` · ${h.changed_by}` : ""}
+                      </div>
+                      {rows.length === 0 ? (
+                        <div className="muted" style={{ fontSize: 12 }}>No field changes recorded.</div>
+                      ) : (
+                        rows.map((r, i) => (
+                          <div key={i} style={{ fontSize: 12.5 }}>
+                            <span style={{ fontWeight: 600 }}>{r.label}:</span> {r.before} → {r.after}
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
-    <>
-      {loading ? (
-        <p className="muted">Loading…</p>
-      ) : (
-        <form className="auth-form" onSubmit={handleSave}>
-          {meta && <p className="muted" style={{ margin: "-4px 0 4px", fontSize: 12 }}>Last updated {formatDate(meta.updated_at)}</p>}
-          <label>
-            Document class
-            <select value={selectedClassId} onChange={(e) => { setSelectedClassId(e.target.value); setValues({}); }}>
-              <option value="">— None —</option>
-              {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </label>
+    <form className="auth-form" onSubmit={handleSave}>
+      {meta && <p className="muted" style={{ margin: "-4px 0 4px", fontSize: 12 }}>Last updated {formatDate(meta.updated_at)}</p>}
+      <label>
+        Document class
+        <select value={selectedClassId} onChange={(e) => { setSelectedClassId(e.target.value); setValues({}); }}>
+          <option value="">— None —</option>
+          {classes.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+      </label>
 
-          {activeClass && activeClass.fields.length > 0 && (
-            <div style={{ marginTop: 4 }}>
-              {activeClass.fields.map((f) => (
-                <label key={f.key}>
-                  {f.label}
-                  {f.required && <span style={{ color: "#e53e3e", marginLeft: 3 }}>*</span>}
-                  {f.type === "boolean" ? (
-                    <input
-                      type="checkbox"
-                      checked={!!values[f.key]}
-                      onChange={(e) => setFieldValue(f.key, e.target.checked)}
-                      style={{ width: "auto", marginLeft: 8 }}
-                    />
-                  ) : f.type === "select" ? (
-                    <select value={(values[f.key] as string) ?? ""} onChange={(e) => setFieldValue(f.key, e.target.value)}>
-                      <option value="">—</option>
-                      {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
-                    </select>
-                  ) : (
-                    <input
-                      type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
-                      value={(values[f.key] as string) ?? ""}
-                      onChange={(e) => setFieldValue(f.key, f.type === "number" ? Number(e.target.value) : e.target.value)}
-                      required={f.required}
-                    />
-                  )}
-                </label>
-              ))}
-            </div>
-          )}
-
-          {error && <div className="auth-error">{error}</div>}
-          {saved && <div className="auth-success">Saved.</div>}
-          <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save metadata"}</button>
-        </form>
+      {activeClass && activeClass.fields.length > 0 && (
+        <div style={{ marginTop: 4 }}>
+          {activeClass.fields.map((f) => (
+            <label key={f.key}>
+              {f.label}
+              {f.required && <span style={{ color: "#e53e3e", marginLeft: 3 }}>*</span>}
+              {f.type === "boolean" ? (
+                <input
+                  type="checkbox"
+                  checked={!!values[f.key]}
+                  onChange={(e) => setFieldValue(f.key, e.target.checked)}
+                  style={{ width: "auto", marginLeft: 8 }}
+                />
+              ) : f.type === "select" ? (
+                <select value={(values[f.key] as string) ?? ""} onChange={(e) => setFieldValue(f.key, e.target.value)}>
+                  <option value="">—</option>
+                  {f.options.map((o) => <option key={o} value={o}>{o}</option>)}
+                </select>
+              ) : (
+                <input
+                  type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
+                  value={(values[f.key] as string) ?? ""}
+                  onChange={(e) => setFieldValue(f.key, f.type === "number" ? Number(e.target.value) : e.target.value)}
+                  required={f.required}
+                />
+              )}
+            </label>
+          ))}
+        </div>
       )}
-    </>
+
+      {resourceType === "folder" && (
+        <label style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: 6, fontWeight: 400 }}>
+          <input type="checkbox" checked={applyToChildren} onChange={(e) => setApplyToChildren(e.target.checked)} style={{ width: "auto" }} />
+          Apply to every file and folder inside this folder
+        </label>
+      )}
+
+      {error && <div className="auth-error">{error}</div>}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button type="submit" disabled={busy}>{busy ? "Saving…" : "Save metadata"}</button>
+        {meta?.class_id && (
+          <button type="button" className="btn-secondary" onClick={cancelEdit}>Cancel</button>
+        )}
+      </div>
+    </form>
   );
 }
 
-// ---------- Public export — dispatcher ---------------------------------------
+// ---------- Public export — the per-resource "Set Metadata" modal -----------
 
 export function DocumentClassesPanel({
   onClose,
@@ -313,16 +461,13 @@ export function DocumentClassesPanel({
   resourceName,
 }: {
   onClose: () => void;
-  resourceId?: string;
-  resourceType?: "file" | "folder";
-  resourceName?: string;
+  resourceId: string;
+  resourceType: "file" | "folder";
+  resourceName: string;
 }) {
-  if (resourceId && resourceType && resourceName) {
-    return (
-      <Modal title={`Metadata — ${resourceName}`} onClose={onClose} width={480}>
-        <MetadataEditorContent resourceId={resourceId} resourceType={resourceType} />
-      </Modal>
-    );
-  }
-  return <ClassListView onClose={onClose} />;
+  return (
+    <Modal title={`Metadata — ${resourceName}`} onClose={onClose} width={480}>
+      <MetadataEditorContent resourceId={resourceId} resourceType={resourceType} />
+    </Modal>
+  );
 }

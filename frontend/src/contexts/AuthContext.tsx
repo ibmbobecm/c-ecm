@@ -9,7 +9,7 @@ type AuthContextValue = {
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   logout: () => void;
-  hasRole: (role: string) => boolean;
+  can: (featureKey: string) => boolean;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -58,10 +58,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
-  const hasRole = (role: string) => user?.roles?.includes(role) ?? false;
+  const can = (featureKey: string) => Boolean(user?.is_superadmin) || (user?.features ?? []).includes(featureKey);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  const value = useMemo(() => ({ user, loading, login, logout, hasRole }), [user, loading]);
+  const value = useMemo(() => ({ user, loading, login, logout, can }), [user, loading]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

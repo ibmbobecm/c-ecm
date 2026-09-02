@@ -4,7 +4,7 @@ import sqlite3
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import activity_service, locks_store
+from .. import access_control, activity_service, locks_store
 from ..auth import CurrentSession, get_current_session
 from ..schemas import LockOut, CheckoutRequest
 from ..storage_providers.base import ProviderError
@@ -19,6 +19,7 @@ def _current_user(session: CurrentSession) -> str:
 
 @router.post("", response_model=LockOut, status_code=201)
 def checkout_resource(req: CheckoutRequest, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, req.resource_id, req.resource_type, "edit")
     try:
         lock = locks_store.checkout(
             connection_id=session.connection_id,
@@ -55,11 +56,11 @@ def checkin_resource(
     if lock is None:
         raise HTTPException(status_code=404, detail="This document is not checked out")
     actor = _current_user(session)
-    is_admin = "admin" in session.user.get("roles", [])
-    # The lock holder or an admin can check in — without the admin
-    # override, a checkout from a departed/unavailable user could never
-    # be released again by anyone.
-    if lock["locked_by"] != actor and not is_admin:
+    is_superadmin = session.user.get("is_superadmin", False)
+    # The lock holder or a superadmin can check in — without the override,
+    # a checkout from a departed/unavailable user could never be released
+    # again by anyone.
+    if lock["locked_by"] != actor and not is_superadmin:
         raise HTTPException(status_code=403, detail="Only the user who checked out this document (or an admin) can check it in")
     locks_store.checkin(session.connection_id, resource_id)
     activity_service.record_event(
@@ -74,7 +75,8 @@ def checkin_resource(
 
 
 @router.get("/{resource_id}", response_model=LockOut | None)
-def get_lock(resource_id: str, session: CurrentSession = Depends(get_current_session)):
+def get_lock(resource_id: str, resource_type: str = "file", session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, resource_type, "view")
     lock = locks_store.get_lock(session.connection_id, resource_id)
     return LockOut(**lock) if lock else None
 

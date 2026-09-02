@@ -9,30 +9,27 @@ import { ItemGrid } from "../components/ItemGrid";
 import { ContextMenu, type MenuAction } from "../components/ContextMenu";
 import { TextInputDialog } from "../components/TextInputDialog";
 import { MoveDialog } from "../components/MoveDialog";
-import { IntegrationsPage } from "./IntegrationsPage";
-import { AuditLogPage } from "./AuditLogPage";
 import { DocumentViewerPage, type ViewerSection } from "./DocumentViewerPage";
 import { CommandPalette, type PaletteItem } from "../components/CommandPalette";
 import { TagsDialog } from "../components/TagsDialog";
+import { AccessGrantsDialog } from "../components/AccessGrantsDialog";
 import { CommentsPanel } from "../components/CommentsPanel";
 import { ShareLinkDialog } from "../components/ShareLinkDialog";
 import { WorkflowsPanel } from "../components/WorkflowsPanel";
 import { ESignatureDialog } from "../components/ESignatureDialog";
 import { GlobalSearchPanel } from "../components/GlobalSearchPanel";
-import { UserManagementPanel } from "../components/UserManagementPanel";
+import { AiAgentDialog } from "../components/AiAgentDialog";
 import { DocumentClassesPanel } from "../components/DocumentClassesPanel";
-import { WebhookManagementPanel } from "../components/WebhookManagementPanel";
-import { RetentionPolicyPanel } from "../components/RetentionPolicyPanel";
+import { SettingsPage, type SettingsTab } from "../components/SettingsPage";
 import { Icon, fileTypeIconName } from "../icons";
 import { keyOf } from "../utils";
 
 type Flash = { type: "error" | "success"; message: string };
 
 export function Drive() {
-  const { logout } = useAuth();
+  const { logout, can } = useAuth();
   const { connections, activeConnectionId, selectConnection, loading: connectionsLoading } = useConnections();
-  const [integrationsPageOpen, setIntegrationsPageOpen] = useState(false);
-  const [auditLogOpen, setAuditLogOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab | null>(null);
   const [aiBackend, setAiBackend] = useState<string | undefined>(undefined);
 
   const [view, setView] = useState<ViewMode>("mine");
@@ -55,15 +52,13 @@ export function Drive() {
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [tagsItem, setTagsItem] = useState<DriveItem | null>(null);
+  const [accessItem, setAccessItem] = useState<DriveItem | null>(null);
   const [commentsItem, setCommentsItem] = useState<DriveItem | null>(null);
   const [shareItem, setShareItem] = useState<DriveItem | null>(null);
   const [esignItem, setEsignItem] = useState<FileItem | null>(null);
   const [requestApprovalItem, setRequestApprovalItem] = useState<DriveItem | null>(null);
   const [metadataItem, setMetadataItem] = useState<DriveItem | null>(null);
-  const [usersOpen, setUsersOpen] = useState(false);
-  const [docClassesOpen, setDocClassesOpen] = useState(false);
-  const [webhooksOpen, setWebhooksOpen] = useState(false);
-  const [retentionOpen, setRetentionOpen] = useState(false);
+  const [aiAgentItem, setAiAgentItem] = useState<DriveItem | null>(null);
   const [tagsByResource, setTagsByResource] = useState<Record<string, Tag[]>>({});
   const [commentCounts, setCommentCounts] = useState<Record<string, number>>({});
   const [locksByResource, setLocksByResource] = useState<Record<string, Lock>>({});
@@ -75,6 +70,7 @@ export function Drive() {
   const [uploadStatus, setUploadStatus] = useState<{ current: number; total: number; name: string } | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
   const showError = (err: unknown, fallback: string) => {
@@ -246,6 +242,60 @@ export function Drive() {
     loadContents();
   };
 
+  const doFolderUpload = async (files: FileList | File[]) => {
+    const list = Array.from(files) as (File & { webkitRelativePath: string })[];
+    if (list.length === 0) return;
+
+    // webkitdirectory hands back a flat FileList, but each File carries its
+    // path within the picked folder (e.g. "Reports/2024/q1.pdf") -- the
+    // directory structure has to be recreated one folder at a time, parents
+    // before children, and each file then uploaded into the matching one.
+    const dirPaths = new Set<string>();
+    for (const f of list) {
+      const parts = f.webkitRelativePath.split("/").slice(0, -1);
+      for (let i = 1; i <= parts.length; i++) dirPaths.add(parts.slice(0, i).join("/"));
+    }
+    const orderedDirs = Array.from(dirPaths).sort((a, b) => a.split("/").length - b.split("/").length);
+
+    const idByPath = new Map<string, string | null>();
+    let failures = 0;
+    for (const path of orderedDirs) {
+      const segments = path.split("/");
+      const name = segments[segments.length - 1];
+      const parentPath = segments.slice(0, -1).join("/");
+      const parentId = parentPath ? idByPath.get(parentPath) ?? null : folderId;
+      try {
+        const created = await apiPost<{ id: string }>("/folders", { name, parent_id: parentId });
+        idByPath.set(path, created.id);
+      } catch (err) {
+        failures++;
+        showError(err, `Couldn't create folder "${name}".`);
+        idByPath.set(path, null); // files under it fall back to the parent instead of being dropped silently
+      }
+    }
+
+    for (let i = 0; i < list.length; i++) {
+      const f = list[i];
+      setUploadStatus({ current: i + 1, total: list.length, name: f.webkitRelativePath });
+      const dirPath = f.webkitRelativePath.split("/").slice(0, -1).join("/");
+      const targetFolderId = idByPath.get(dirPath) ?? folderId;
+      const form = new FormData();
+      form.append("upload", f);
+      if (targetFolderId !== null) form.append("folder_id", targetFolderId);
+      try {
+        await apiUpload("/files", form);
+      } catch (err) {
+        failures++;
+        showError(err, `Couldn't upload "${f.name}".`);
+      }
+    }
+    setUploadStatus(null);
+    if (failures === 0 && list.length > 0) {
+      showSuccess(`Uploaded ${list.length} file${list.length === 1 ? "" : "s"} from the folder.`);
+    }
+    loadContents();
+  };
+
   const handleCreateFolder = async (name: string) => {
     try {
       await apiPost("/folders", { name, parent_id: folderId });
@@ -393,6 +443,10 @@ export function Drive() {
       label: "Set Metadata", icon: "tag",
       onClick: () => (item.type === "file" ? setViewer({ file: item, section: "properties" }) : setMetadataItem(item)),
     });
+    actions.push({ label: "Create AI Agent", icon: "bot", onClick: () => setAiAgentItem(item) });
+    if (can("manage_resource_permissions")) {
+      actions.push({ label: "Manage Access", icon: "lock", onClick: () => setAccessItem(item) });
+    }
     if (item.type === "file") {
       actions.push({ label: "AI Insights", icon: "star", onClick: () => setViewer({ file: item, section: "ai" }) });
       actions.push({ label: "Send for signature", icon: "signature", onClick: () => setEsignItem(item) });
@@ -562,14 +616,6 @@ export function Drive() {
       </div>
     ) : null;
 
-  if (integrationsPageOpen) {
-    return <IntegrationsPage onBack={() => setIntegrationsPageOpen(false)} />;
-  }
-
-  if (auditLogOpen) {
-    return <AuditLogPage onBack={() => setAuditLogOpen(false)} />;
-  }
-
   return (
     <div
       className="drive-app"
@@ -590,13 +636,9 @@ export function Drive() {
         onViewChange={goToView}
         onNewFolder={() => setNewFolderOpen(true)}
         onUploadClick={() => fileInputRef.current?.click()}
+        onUploadFolderClick={() => folderInputRef.current?.click()}
         uploading={!!uploadStatus}
-        onOpenIntegrations={() => setIntegrationsPageOpen(true)}
-        onOpenUsers={() => setUsersOpen(true)}
-        onOpenDocClasses={() => setDocClassesOpen(true)}
-        onOpenWebhooks={() => setWebhooksOpen(true)}
-        onOpenRetention={() => setRetentionOpen(true)}
-        onOpenAuditLog={() => setAuditLogOpen(true)}
+        onOpenSettings={() => setSettingsTab("connections")}
         onLogout={logout}
       />
 
@@ -611,6 +653,26 @@ export function Drive() {
         }}
       />
 
+      {/* webkitdirectory isn't a typed React DOM prop, so it's set via
+          setAttribute in the ref callback rather than JSX -- it's what
+          turns this from a file picker into a folder picker. */}
+      <input
+        ref={(el) => {
+          folderInputRef.current = el;
+          el?.setAttribute("webkitdirectory", "");
+        }}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        onChange={(e) => {
+          if (e.target.files) doFolderUpload(e.target.files);
+          e.target.value = "";
+        }}
+      />
+
+      {settingsTab ? (
+        <SettingsPage initialTab={settingsTab} onClose={() => setSettingsTab(null)} />
+      ) : (
       <main className="drive-main">
         <Toolbar
           ref={searchInputRef}
@@ -720,6 +782,7 @@ export function Drive() {
           </div>
         )}
       </main>
+      )}
 
       {contextMenu && (
         <ContextMenu
@@ -789,6 +852,10 @@ export function Drive() {
         <TagsDialog item={tagsItem} onClose={() => setTagsItem(null)} onChange={() => loadResourceMeta([tagsItem])} />
       )}
 
+      {accessItem && (
+        <AccessGrantsDialog item={accessItem} onClose={() => setAccessItem(null)} />
+      )}
+
       {commentsItem && (
         <CommentsPanel item={commentsItem} onClose={() => setCommentsItem(null)} onChange={() => loadResourceMeta([commentsItem])} />
       )}
@@ -797,8 +864,8 @@ export function Drive() {
 
       {esignItem && <ESignatureDialog file={esignItem} onClose={() => setEsignItem(null)} />}
 
-      {usersOpen && <UserManagementPanel onClose={() => setUsersOpen(false)} />}
-      {docClassesOpen && <DocumentClassesPanel onClose={() => setDocClassesOpen(false)} />}
+      {aiAgentItem && <AiAgentDialog item={aiAgentItem} onClose={() => setAiAgentItem(null)} />}
+
       {metadataItem && (
         <DocumentClassesPanel
           resourceId={metadataItem.id}
@@ -807,8 +874,6 @@ export function Drive() {
           onClose={() => setMetadataItem(null)}
         />
       )}
-      {webhooksOpen && <WebhookManagementPanel onClose={() => setWebhooksOpen(false)} />}
-      {retentionOpen && <RetentionPolicyPanel onClose={() => setRetentionOpen(false)} />}
 
       {requestApprovalItem && (
         <div className="modal-overlay" onMouseDown={() => setRequestApprovalItem(null)}>

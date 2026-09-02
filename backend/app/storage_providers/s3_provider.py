@@ -427,3 +427,78 @@ class IBMCOSProvider(_S3CompatibleProvider):
 
     def _endpoint_url(self, creds: dict) -> str | None:
         return creds.get("endpoint_url") or None
+
+
+class WasabiProvider(_S3CompatibleProvider):
+    """Wasabi's "hot cloud storage" is a documented, byte-for-byte
+    S3-API-compatible service — same request signing, same operations,
+    just a different regional endpoint host (`s3.<region>.wasabisys.com`)
+    and its own separate access-key/secret-key pair issued from the Wasabi
+    console. Confidence here is as high as AWS S3's own provider above,
+    since this is the same boto3 S3 client pointed at a different host."""
+
+    key = "wasabi"
+    display_name = "Wasabi"
+
+    @property
+    def config_fields(self) -> list[ConfigField]:
+        return [
+            ConfigField("bucket", "Bucket name"),
+            ConfigField("region", "Region", "us-east-1"),
+            ConfigField("prefix", "Folder prefix (optional root within the bucket)", "", required=False),
+        ]
+
+    def _endpoint_url(self, creds: dict) -> str | None:
+        region = (creds.get("region") or "us-east-1").strip()
+        return f"https://s3.{region}.wasabisys.com"
+
+
+class BackblazeB2Provider(_S3CompatibleProvider):
+    """Backblaze B2's native API is its own (bucket/file-id based, not S3),
+    but B2 also publishes a documented S3-Compatible API at
+    `s3.<region>.backblazeb2.com` accepting the same access-key-id/
+    secret-key credentials as B2's "Application Keys" — reusing that here
+    rather than writing a second bespoke B2-native client, since it's the
+    same boto3 S3 client (like Wasabi above) pointed at a different host,
+    which is the same confidence level as this file's other S3-compatible
+    providers rather than a fresh, unverified REST surface."""
+
+    key = "backblaze_b2"
+    display_name = "Backblaze B2"
+
+    @property
+    def config_fields(self) -> list[ConfigField]:
+        return [
+            ConfigField("bucket", "Bucket name"),
+            ConfigField("region", "Region", "us-west-004"),
+            ConfigField("prefix", "Folder prefix (optional root within the bucket)", "", required=False),
+        ]
+
+    def _endpoint_url(self, creds: dict) -> str | None:
+        region = (creds.get("region") or "us-west-004").strip()
+        return f"https://s3.{region}.backblazeb2.com"
+
+
+class GCSProvider(_S3CompatibleProvider):
+    """Google Cloud Storage's native API is JSON/OAuth2-based, but GCS also
+    publishes a documented XML "interoperability" API at
+    `storage.googleapis.com` that accepts S3-style HMAC access-key/secret
+    pairs (created under Cloud Storage's "Interoperability" settings) —
+    reusing the same S3-compatible client as this file's other providers
+    rather than a separate, unverified OAuth2/service-account JSON flow.
+    This does mean the credential pair here is a GCS HMAC key, not a full
+    Google account login — flagged via `credential_labels`."""
+
+    key = "gcs"
+    display_name = "Google Cloud Storage"
+    credential_labels = ("HMAC Access Key", "HMAC Secret")
+
+    @property
+    def config_fields(self) -> list[ConfigField]:
+        return [
+            ConfigField("bucket", "Bucket name"),
+            ConfigField("prefix", "Folder prefix (optional root within the bucket)", "", required=False),
+        ]
+
+    def _endpoint_url(self, creds: dict) -> str | None:
+        return "https://storage.googleapis.com"

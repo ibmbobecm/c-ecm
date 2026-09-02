@@ -2,7 +2,7 @@ import concurrent.futures
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import connections_store, saved_searches_store
+from .. import access_control, connections_store, saved_searches_store
 from ..access_helpers import to_http
 from ..auth import CurrentSession, CurrentUser, get_current_user, get_current_session
 from ..schemas import (
@@ -20,12 +20,24 @@ from ..storage_providers.registry import get_provider
 router = APIRouter(prefix="/search", tags=["search"])
 
 
+def _filter_by_access(session: CurrentSession, folders, files):
+    # Post-query filtering, not a query constraint — results the caller
+    # can't view are simply omitted rather than the whole search failing.
+    # effective_level's own connection_has_any_grants() fast-path means
+    # this costs nothing extra for the common case where nothing on the
+    # connection is restricted.
+    folders = [f for f in folders if access_control.effective_level(session, f.id, "folder") != "none"]
+    files = [f for f in files if access_control.effective_level(session, f.id, "file") != "none"]
+    return folders, files
+
+
 @router.get("", response_model=SearchResultOut)
 def search(q: str = Query(min_length=1, max_length=255), session: CurrentSession = Depends(get_current_session)):
     try:
         folders, files = session.provider.search(session.creds, q)
     except ProviderError as exc:
         raise to_http(exc)
+    folders, files = _filter_by_access(session, folders, files)
     return SearchResultOut(folders=[folder_out(f) for f in folders], files=[file_out(f) for f in files])
 
 
@@ -75,6 +87,12 @@ def global_search(
             except Exception:
                 pass
             folders, files = provider.search(creds, q)
+            # Same per-hit access filtering as the single-connection search
+            # below — a lightweight CurrentSession built inline since this
+            # runs in a thread-pool worker, off the request's own Depends()
+            # chain.
+            fake_session = CurrentSession(connection_id=cid, provider_key=provider_key, provider=provider, creds=creds, user=_user)
+            folders, files = _filter_by_access(fake_session, folders, files)
             conn_hits: list[GlobalSearchHit] = []
             for folder in folders:
                 conn_hits.append(
@@ -177,4 +195,5 @@ def run_saved_search(search_id: str, session: CurrentSession = Depends(get_curre
     types = set(query.get("file_types") or [])
     if types:
         files = [f for f in files if (f.name.rsplit(".", 1)[-1].lower() if "." in f.name else "") in types]
+    folders, files = _filter_by_access(session, folders, files)
     return SearchResultOut(folders=[folder_out(f) for f in folders], files=[file_out(f) for f in files])

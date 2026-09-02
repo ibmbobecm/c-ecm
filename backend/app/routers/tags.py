@@ -1,10 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import activity_service, tags_store
+from .. import access_control, activity_service, tags_store
 from ..auth import CurrentSession, get_app_session, get_current_session
 from ..schemas import BulkTagsRequest, TagAttachRequest, TagCreateRequest, TagOut
 
 router = APIRouter(tags=["tags"])
+
+# get_bulk_resource_tags (below) has no per-resource check for the same
+# reason as comments.py's bulk counts endpoint — it fans out over a whole
+# folder listing at once; tag *names* on many resources aren't sensitive
+# enough to justify an ancestor walk per item. Single-resource tag routes
+# below ARE checked, at "view" — tagging something you can see doesn't
+# need full edit rights.
 
 
 def _actor(session: CurrentSession) -> str:
@@ -45,12 +52,14 @@ def get_bulk_resource_tags(req: BulkTagsRequest, session: CurrentSession = Depen
 
 
 @router.get("/resources/{resource_id}/tags", response_model=list[TagOut])
-def get_resource_tags(resource_id: str, session: CurrentSession = Depends(get_current_session)):
+def get_resource_tags(resource_id: str, resource_type: str = "file", session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, resource_type, "view")
     return [TagOut(**t) for t in tags_store.get_tags_for_resource(session.connection_id, resource_id)]
 
 
 @router.post("/resources/{resource_id}/tags", response_model=list[TagOut], status_code=201)
 def attach_tag(resource_id: str, req: TagAttachRequest, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, req.resource_type, "view")
     tag = next((t for t in tags_store.list_tags() if t["id"] == req.tag_id), None)
     if tag is None:
         raise HTTPException(status_code=404, detail="Tag not found")
@@ -70,5 +79,6 @@ def attach_tag(resource_id: str, req: TagAttachRequest, session: CurrentSession 
 
 
 @router.delete("/resources/{resource_id}/tags/{tag_id}", status_code=204)
-def detach_tag(resource_id: str, tag_id: str, session: CurrentSession = Depends(get_current_session)):
+def detach_tag(resource_id: str, tag_id: str, resource_type: str = "file", session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, resource_type, "view")
     tags_store.untag_resource(session.connection_id, resource_id, tag_id)

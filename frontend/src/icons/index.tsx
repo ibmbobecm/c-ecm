@@ -209,6 +209,17 @@ const UI_ICONS: Record<string, (p: IconProps) => ReactElement> = {
       <path d="M3.5 5.5A1.5 1.5 0 0 1 5 4h10a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 15 13H8l-3.3 2.8a.5.5 0 0 1-.82-.38V13H5a1.5 1.5 0 0 1-1.5-1.5Z" />
     </Stroke>
   ),
+  bot: (p) => (
+    <Stroke {...p}>
+      <path d="M10 3v2.2" />
+      <circle cx="10" cy="4.4" r="0.9" fill="currentColor" stroke="none" />
+      <rect x="4" y="5.5" width="12" height="9.5" rx="2.5" />
+      <circle cx="7.7" cy="10" r="1" fill="currentColor" stroke="none" />
+      <circle cx="12.3" cy="10" r="1" fill="currentColor" stroke="none" />
+      <path d="M7.5 13h5" />
+      <path d="M1.8 9v3M18.2 9v3" />
+    </Stroke>
+  ),
   signature: (p) => (
     <Stroke {...p}>
       <path d="M2.5 14.5c1.5-1 2.3-2.3 2.6-3.4.4-1.5-.2-2.6-1.1-2.4-1 .2-1 2 .3 3.4 1.6 1.7 4 1.9 5.6.2 1-1 1.4-2.8 2.4-3.8 1.3-1.3 2.6-.4 2 1.1-.5 1.3-1.9 2.9-1.1 4 .7.9 2.3.3 3.3-.8" />
@@ -428,11 +439,54 @@ const PROVIDER_COLOR: Record<string, string> = {
   google_drive: "#1A73E8",
   onedrive_sharepoint: "#0364B8",
   box: "#0061D5",
+  dropbox: "#0061FF",
+  laserfiche: "#C41230",
+  sharefile: "#00A88E",
+  documentum: "#7B2D8E",
+  opentext_content_server: "#E8590C",
+  mfiles: "#0093D0",
+  onbase: "#005EB8",
+  nuxeo: "#00A99D",
+  docuware: "#0072BC",
+  docushare: "#E2231A",
   aws_s3: "#E8710A",
   ibm_cos: "#054ADA",
   azure_blob: "#00A2E8",
   ibm_i: "#0f62fe",
   ibm_z: "#198038",
+  wasabi: "#22C35E",
+  backblaze_b2: "#E0393E",
+  gcs: "#4285F4",
+  nextcloud: "#0082C9",
+  owncloud: "#1D2D44",
+  synology_drive: "#B5B5B6",
+  qnap: "#0C5FA5",
+  ibm_content_navigator: "#0f62fe",
+  sap_dms: "#0FAAFF",
+  egnyte: "#00A651",
+  confluence: "#2684FF",
+  huddle: "#0072CE",
+  netdocuments: "#003865",
+  zoho_workdrive: "#E42527",
+  imanage: "#00263E",
+  onehub: "#3AA7DB",
+  salesforce_files: "#00A1E0",
+  oracle_content_management: "#F80000",
+  kiteworks: "#003057",
+  aem_assets: "#FA0F00",
+  filecloud: "#1F8A3D",
+  pcloud: "#1FA5EC",
+  seafile: "#F39C12",
+  logicaldoc: "#4A7EBB",
+  veeva_vault: "#DD3333",
+  mediafire: "#1299F3",
+  efilecabinet: "#5C6BC0",
+  firmex: "#8E1B3B",
+  sharevault: "#2B6CB0",
+  intralinks: "#123B6D",
+  highq: "#FF8000",
+  workshare: "#00558C",
+  evernote_teams: "#00A82D",
 };
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -442,6 +496,49 @@ const PROVIDER_LABEL: Record<string, string> = {
   google_drive: "GD",
   onedrive_sharepoint: "MS",
   box: "BX",
+  dropbox: "DB",
+  laserfiche: "LF",
+  sharefile: "SF",
+  documentum: "DM",
+  opentext_content_server: "OT",
+  mfiles: "MF",
+  onbase: "OB",
+  nuxeo: "NX",
+  docuware: "DW",
+  wasabi: "WB",
+  backblaze_b2: "B2",
+  gcs: "GC",
+  nextcloud: "NC",
+  owncloud: "OC",
+  synology_drive: "SY",
+  qnap: "QN",
+  ibm_content_navigator: "CN",
+  sap_dms: "SAP",
+  egnyte: "EG",
+  confluence: "CF",
+  huddle: "HD",
+  netdocuments: "ND",
+  zoho_workdrive: "ZW",
+  imanage: "IM",
+  onehub: "1H",
+  salesforce_files: "SLF",
+  oracle_content_management: "OR",
+  kiteworks: "KW",
+  aem_assets: "AEM",
+  filecloud: "FC",
+  pcloud: "PC",
+  seafile: "SE",
+  logicaldoc: "LD",
+  veeva_vault: "VV",
+  mediafire: "MDF",
+  efilecabinet: "EF",
+  firmex: "FX",
+  sharevault: "SV",
+  intralinks: "IL",
+  highq: "HQ",
+  workshare: "WS",
+  evernote_teams: "EV",
+  docushare: "DS",
   aws_s3: "S3",
   ibm_cos: "COS",
   azure_blob: "AZ",
@@ -472,5 +569,33 @@ export function ProviderBadge({ providerKey, size = 20 }: { providerKey: string;
     >
       {label}
     </span>
+  );
+}
+
+// Real brand marks for the two chat destinations a webhook can post to --
+// worth drawing properly (unlike ProviderBadge's generic initials-in-a-
+// circle) since these are recognized logos people look for at a glance.
+export function SlackIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 122.8 122.8" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M25.8,77.6c0,7.1-5.8,12.9-12.9,12.9S0,84.7,0,77.6s5.8-12.9,12.9-12.9h12.9V77.6z" fill="#E01E5A" />
+      <path d="M32.3,77.6c0-7.1,5.8-12.9,12.9-12.9s12.9,5.8,12.9,12.9v32.3c0,7.1-5.8,12.9-12.9,12.9s-12.9-5.8-12.9-12.9V77.6z" fill="#E01E5A" />
+      <path d="M45.2,25.8c-7.1,0-12.9-5.8-12.9-12.9S38.1,0,45.2,0s12.9,5.8,12.9,12.9v12.9H45.2z" fill="#36C5F0" />
+      <path d="M45.2,32.3c7.1,0,12.9,5.8,12.9,12.9s-5.8,12.9-12.9,12.9H12.9C5.8,58.1,0,52.3,0,45.2s5.8-12.9,12.9-12.9H45.2z" fill="#36C5F0" />
+      <path d="M97,45.2c0-7.1,5.8-12.9,12.9-12.9s12.9,5.8,12.9,12.9-5.8,12.9-12.9,12.9H97V45.2z" fill="#2EB67D" />
+      <path d="M90.5,45.2c0,7.1-5.8,12.9-12.9,12.9s-12.9-5.8-12.9-12.9V12.9C64.7,5.8,70.5,0,77.6,0s12.9,5.8,12.9,12.9V45.2z" fill="#2EB67D" />
+      <path d="M77.6,97c7.1,0,12.9,5.8,12.9,12.9s-5.8,12.9-12.9,12.9-12.9-5.8-12.9-12.9V97H77.6z" fill="#ECB22E" />
+      <path d="M77.6,90.5c-7.1,0-12.9-5.8-12.9-12.9s5.8-12.9,12.9-12.9h32.3c7.1,0,12.9,5.8,12.9,12.9s-5.8,12.9-12.9,12.9H77.6z" fill="#ECB22E" />
+    </svg>
+  );
+}
+
+export function DiscordIcon({ size = 16 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
+      <path d="M12 2C7 2 4 5 4 9v6c0 3.3 3.1 6 7 6h2c3.9 0 7-2.7 7-6V9c0-4-3-7-8-7z" fill="#5865F2" />
+      <ellipse cx="9" cy="12" rx="1.6" ry="2" fill="#fff" />
+      <ellipse cx="15" cy="12" rx="1.6" ry="2" fill="#fff" />
+    </svg>
   );
 }

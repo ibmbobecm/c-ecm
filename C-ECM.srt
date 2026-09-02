@@ -1,0 +1,215 @@
+1
+00:00:00,000 --> 00:00:01,018
+Hi everyone! Welcome to the IBM Bob Hackathon
+
+2
+00:00:01,098 --> 00:00:02,528
+I'm Mohammad Jamil Ahmed, and I'm incredibly excited to be here.
+
+3
+00:00:02,608 --> 00:00:03,489
+I want to be honest with you.
+
+4
+00:00:03,569 --> 00:00:04,999
+During this build, IBM Bob hit its 40,000-token context limit —
+
+5
+00:00:05,079 --> 00:00:05,960
+multiple times. The session would fill up,
+
+6
+00:00:06,040 --> 00:00:06,920
+Bob would lose track of earlier decisions,
+
+7
+00:00:07,000 --> 00:00:08,430
+and I had to export the task, start a fresh session,
+
+8
+00:00:08,510 --> 00:00:09,666
+and re-anchor it with context from the previous one.
+
+9
+00:00:09,746 --> 00:00:10,764
+But here's what's remarkable: even with that constraint,
+
+10
+00:00:10,844 --> 00:00:12,137
+I managed the entire project across five Bob sessions —
+
+11
+00:00:12,217 --> 00:00:13,509
+exporting tasks, re-loading context, and keeping the build moving forward.
+
+12
+00:00:13,589 --> 00:00:15,705
+That discipline of working with an AI agent across its limits is itself a real-world skill.
+
+13
+00:00:15,785 --> 00:00:17,490
+And the result? Nine hundred and eighty-one Bob interactions, five exported session files,
+
+14
+00:00:17,570 --> 00:00:18,176
+and a fully working product.
+
+15
+00:00:18,256 --> 00:00:19,412
+Let me share the pain which I have resolved.
+
+16
+00:00:19,492 --> 00:00:20,937
+Picture a Friday afternoon production incident.
+
+17
+00:00:21,017 --> 00:00:22,462
+Something broke in the last deployment.
+
+18
+00:00:22,542 --> 00:00:25,005
+The on-call engineer needs the approved runbook, the change-approval record,
+
+19
+00:00:25,085 --> 00:00:26,784
+and the audit log — right now.
+
+20
+00:00:26,864 --> 00:00:29,327
+What actually happens? The official document is in FileNet —
+
+21
+00:00:29,407 --> 00:00:31,361
+but nobody knows which version was signed off.
+
+22
+00:00:31,441 --> 00:00:34,157
+The working copy is on a shared drive, in three folders,
+
+23
+00:00:34,237 --> 00:00:35,174
+with three different names.
+
+24
+00:00:35,254 --> 00:00:37,971
+The approval lives in an email thread from six months ago.
+
+25
+00:00:38,051 --> 00:00:40,513
+And the mainframe DMS has never been connected to anything.
+
+26
+00:00:40,593 --> 00:00:43,056
+That's five systems that don't talk to each other —
+
+27
+00:00:43,136 --> 00:00:44,327
+and the clock is ticking.
+
+28
+00:00:44,407 --> 00:00:45,852
+This is not an edge case.
+
+29
+00:00:45,932 --> 00:00:48,649
+This is every bank, insurer, and government agency running enterprise workloads.
+
+30
+00:00:48,729 --> 00:00:51,452
+I built C-ECM — Centralized Enterprise Content Management.
+
+31
+00:00:51,532 --> 00:00:58,662
+It's a governance and intelligence layer that sits in front of every storage system your teams already use
+
+32
+00:00:58,742 --> 00:01:03,067
+IBM FileNet, IBM i, IBM Z mainframe, SharePoint, Google Drive, S3,
+
+33
+00:01:03,147 --> 00:01:06,271
+Azure Blob, Box — eleven backends in total.
+
+34
+00:01:06,351 --> 00:01:09,475
+It looks and feels like a shared drive.
+
+35
+00:01:09,555 --> 00:01:13,881
+But behind the scenes, every document is now approval-gated, version-controlled, audit-logged,
+
+36
+00:01:13,961 --> 00:01:17,886
+and cross-system-searchable — on day one, with zero migration required.
+
+37
+00:01:17,966 --> 00:01:22,033
+One search bar queries all eleven backends in parallel —
+
+38
+00:01:22,113 --> 00:01:29,083
+not sequentially, so you get results in the time it takes to hit the slowest single system.
+
+39
+00:01:29,163 --> 00:01:31,157
+Multi-step, quorum-based approval workflows —
+
+40
+00:01:31,237 --> 00:01:34,889
+the same gate a CAB or change-management process needs.
+
+41
+00:01:34,969 --> 00:01:38,622
+Every vote, every rejection, every sign-off is permanently recorded.
+
+42
+00:01:38,702 --> 00:01:44,428
+The compliance dashboard lets you reconstruct any change-approval trail in under five minutes —
+
+43
+00:01:44,508 --> 00:01:47,746
+not five days. One-click CSV export for auditors.
+
+44
+00:01:47,826 --> 00:01:52,307
+And IBM watsonx.ai is integrated for document intelligence — summarize, classify,
+
+45
+00:01:52,387 --> 00:01:56,869
+and ask natural-language questions about any document without even opening it.
+
+46
+00:01:56,949 --> 00:02:06,084
+This entire project was built end-to-end using IBM Bob in Agent mode —
+
+47
+00:02:06,164 --> 00:02:13,880
+not as an autocomplete tool, but as a true agentic developer.
+
+48
+00:02:13,960 --> 00:02:23,803
+Every change was verified against a live 217-test backend suite before being reported complete.
+
+49
+00:02:23,883 --> 00:02:35,852
+Nine hundred and eighty-one total IBM Bob interactions are exported and committed to the repo as evidence.
+
+50
+00:02:35,932 --> 00:02:41,050
+C-ECM removes the document-governance tax that every enterprise pays every day —
+
+51
+00:02:41,130 --> 00:02:44,515
+without asking teams to migrate a single file.
+
+52
+00:02:44,595 --> 00:02:47,114
+One governance layer. Eleven storage systems.
+
+53
+00:02:47,194 --> 00:02:50,146
+Zero migration. Built with IBM Bob 2.0.
+
+54
+00:02:50,226 --> 00:02:55,424
+Thank you. Feel free to reach out to me for any questions.

@@ -8,15 +8,18 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from . import (
     activity_service,
+    ai_agents_store,
     ai_service,
     comments_store,
     connections_store,
     esignature_store,
     events_store,
+    groups_store,
     locks_store,
     metadata_store,
     notification_service,
     notifications_store,
+    resource_permissions_store,
     retention_service,
     retention_store,
     saved_searches_store,
@@ -28,20 +31,25 @@ from . import (
     workflows_store,
 )
 from .routers import (
+    access_grants,
     activity,
     admin,
     ai,
+    ai_agents,
     auth,
     comments,
     connections,
     esignature,
     files,
     folders,
+    groups,
     locks,
     metadata,
     notifications,
     permissions,
+    public_ai_agents,
     retention,
+    saml,
     search,
     sharing,
     tags,
@@ -58,7 +66,12 @@ logger = logging.getLogger("main")
 async def lifespan(app: FastAPI):
     # Stores — order matters only for foreign-key-style init dependencies;
     # users_store must come first so the admin seed account is available.
+    # (users_store.init_db() also calls groups_store.init_db() itself if it
+    # needs to run the roles->groups migration, but that path only fires on
+    # an existing pre-groups DB — call it here too so the tables always
+    # exist for a fresh install, before any group-editor route can be hit.)
     users_store.init_db()
+    groups_store.init_db()
     connections_store.init_db()
     settings_store.init_db()
     events_store.init_db()
@@ -73,6 +86,8 @@ async def lifespan(app: FastAPI):
     workflows_store.init_db()
     retention_store.init_db()
     esignature_store.init_db()
+    ai_agents_store.init_db()
+    resource_permissions_store.init_db()
 
     # Picks up any AI/Watson settings saved via Admin Settings on a previous
     # run — otherwise a restart would silently fall back to whatever's in
@@ -138,6 +153,8 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 app.include_router(auth.router)
 app.include_router(users.router)
+app.include_router(groups.router)
+app.include_router(saml.router)
 app.include_router(connections.router)
 app.include_router(admin.router)
 app.include_router(folders.router)
@@ -150,6 +167,7 @@ app.include_router(tags.router)
 app.include_router(notifications.router)
 app.include_router(comments.router)
 app.include_router(permissions.router)
+app.include_router(access_grants.router)
 app.include_router(sharing.router)
 app.include_router(sharing.public_router)
 app.include_router(locks.router)
@@ -159,6 +177,25 @@ app.include_router(workflows.router)
 app.include_router(retention.router)
 app.include_router(esignature.router)
 app.include_router(esignature.public_router)
+app.include_router(ai_agents.router)
+app.include_router(ai_agents.admin_router)
+app.include_router(public_ai_agents.page_router, prefix="/public")
+
+# The public agent-chat JSON API is mounted as its own sub-application so it
+# can carry a permissive, origin-agnostic CORS policy (any external site's
+# own JS can fetch() it directly) without loosening the main app's
+# LAN-only CORS policy above — access here is scoped by each agent's own
+# unguessable public_token, not by origin, the same trust model as a
+# public share link.
+_public_agent_api = FastAPI()
+_public_agent_api.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["*"],
+)
+_public_agent_api.include_router(public_ai_agents.router)
+app.mount("/public/ai-agents", _public_agent_api)
 
 
 @app.get("/health")
@@ -179,6 +216,30 @@ def oauth_complete():
     window.close();
   } else {
     document.body.textContent = error ? ("Sign-in failed: " + error) : "Sign-in complete. You can close this window.";
+  }
+</script>
+</body></html>"""
+
+
+@app.get("/sso-complete.html", response_class=HTMLResponse)
+def sso_complete():
+    # Unlike oauth-complete.html (a popup, used for connecting a storage
+    # backend from inside the already-logged-in app), SAML login is a full
+    # top-level navigation away and back — there's no window.opener to post
+    # a message to. Just write the token to the same localStorage key
+    # AuthContext.tsx already reads on mount and navigate home; the SPA
+    # picks the session up on its own from there.
+    return """<!doctype html><html><body>
+<script>
+  var hash = window.location.hash.slice(1);
+  var params = new URLSearchParams(hash);
+  var token = params.get("token");
+  var error = params.get("error");
+  if (token) {
+    localStorage.setItem("filedrive_token", token);
+    window.location.href = "/";
+  } else {
+    document.body.textContent = "Sign-in failed" + (error ? (": " + decodeURIComponent(error)) : ".") + " Go back and try again.";
   }
 </script>
 </body></html>"""

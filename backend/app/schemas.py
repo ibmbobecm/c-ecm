@@ -1,7 +1,9 @@
 import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationInfo, field_validator, model_validator
+
+from .html_sanitize import sanitize_rich_html
 
 
 class ConfigFieldOut(BaseModel):
@@ -19,19 +21,25 @@ class ProviderOut(BaseModel):
     config_fields: list[ConfigFieldOut] = []
     requires_credentials: bool = True
     credential_labels: tuple[str, str] = ("Username", "Password")
+    # True only for placeholder entries with no real StorageProvider behind
+    # them yet (see storage_providers/coming_soon.py) — shown in the
+    # Connections grid for visibility, but not clickable/connectable.
+    coming_soon: bool = False
 
 
-# ---------- users / RBAC ---------------------------------------------------
+# ---------- users / groups / features (access control) --------------------
 
 class UserOut(BaseModel):
     id: str
     username: str
     display_name: str
     email: str | None = None
-    roles: list[str] = []
+    is_superadmin: bool = False
     is_active: bool = True
     created_at: str
     last_login_at: str | None = None
+    groups: list[str] = []  # group names this user belongs to, for display
+    features: list[str] = []  # flattened feature set from all their groups
 
 
 class UserCreateRequest(BaseModel):
@@ -39,15 +47,71 @@ class UserCreateRequest(BaseModel):
     password: str = Field(min_length=6, max_length=200)
     display_name: str = Field(min_length=1, max_length=100)
     email: str | None = None
-    roles: list[str] = ["viewer"]
+    is_superadmin: bool = False
 
 
 class UserUpdateRequest(BaseModel):
     display_name: str | None = None
     email: str | None = None
-    roles: list[str] | None = None
+    is_superadmin: bool | None = None
     is_active: bool | None = None
     new_password: str | None = Field(default=None, min_length=6, max_length=200)
+
+
+class FeatureOut(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class GroupOut(BaseModel):
+    id: str
+    name: str
+    description: str | None = None
+    created_at: str
+    feature_keys: list[str] = []
+    member_count: int = 0
+
+
+class GroupCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    description: str | None = None
+    feature_keys: list[str] = []
+
+
+class GroupUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    description: str | None = None
+    feature_keys: list[str] | None = None
+
+
+# ---------- per-resource access grants --------------------------------------
+
+class AccessGrantOut(BaseModel):
+    id: str
+    resource_id: str
+    resource_type: str
+    principal_type: Literal["user", "group"]
+    principal_id: str
+    principal_display: str  # username or group name, resolved for display
+    level: Literal["view", "edit"]
+    created_at: str
+    created_by: str | None = None
+
+
+class AccessGrantCreateRequest(BaseModel):
+    principal_type: Literal["user", "group"]
+    principal_id: str
+    level: Literal["view", "edit"]
+
+
+class EffectiveAccessOut(BaseModel):
+    # "view"/"edit" — an applicable grant was found. "none" — the
+    # resource is restricted and this caller has no applicable grant.
+    # null — unrestricted (no grant anywhere in the ancestor chain,
+    # today's default). "none" and null are deliberately distinct: one
+    # means "explicitly locked out," the other means "nothing's set up."
+    level: Literal["view", "edit", "none"] | None
 
 
 class AppLoginRequest(BaseModel):
@@ -85,6 +149,45 @@ class AdminSettingsOut(BaseModel):
     ms_tenant: str
     box_client_id: str
     box_client_secret_set: bool
+    dropbox_client_id: str
+    dropbox_client_secret_set: bool
+    laserfiche_client_id: str
+    laserfiche_client_secret_set: bool
+    sharefile_client_id: str
+    sharefile_client_secret_set: bool
+    egnyte_client_id: str
+    egnyte_client_secret_set: bool
+    egnyte_domain: str
+    confluence_client_id: str
+    confluence_client_secret_set: bool
+    huddle_client_id: str
+    huddle_client_secret_set: bool
+    netdocuments_client_id: str
+    netdocuments_client_secret_set: bool
+    zoho_workdrive_client_id: str
+    zoho_workdrive_client_secret_set: bool
+    imanage_client_id: str
+    imanage_client_secret_set: bool
+    imanage_base_url: str
+    onehub_client_id: str
+    onehub_client_secret_set: bool
+    salesforce_files_client_id: str
+    salesforce_files_client_secret_set: bool
+    oracle_content_management_client_id: str
+    oracle_content_management_client_secret_set: bool
+    oracle_content_management_base_url: str
+    oracle_content_management_idcs_url: str
+    kiteworks_client_id: str
+    kiteworks_client_secret_set: bool
+    kiteworks_base_url: str
+    evernote_teams_client_id: str
+    evernote_teams_client_secret_set: bool
+    saml_enabled: bool
+    saml_idp_entity_id: str
+    saml_idp_sso_url: str
+    saml_idp_x509_cert_set: bool
+    saml_default_group_id: str
+    saml_sp_entity_id: str
     docusign_integration_key: str
     docusign_user_id: str
     docusign_account_id: str
@@ -115,6 +218,44 @@ class AdminSettingsUpdate(BaseModel):
     ms_tenant: str | None = None
     box_client_id: str | None = None
     box_client_secret: str | None = None
+    dropbox_client_id: str | None = None
+    dropbox_client_secret: str | None = None
+    laserfiche_client_id: str | None = None
+    laserfiche_client_secret: str | None = None
+    sharefile_client_id: str | None = None
+    sharefile_client_secret: str | None = None
+    egnyte_client_id: str | None = None
+    egnyte_client_secret: str | None = None
+    egnyte_domain: str | None = None
+    confluence_client_id: str | None = None
+    confluence_client_secret: str | None = None
+    huddle_client_id: str | None = None
+    huddle_client_secret: str | None = None
+    netdocuments_client_id: str | None = None
+    netdocuments_client_secret: str | None = None
+    zoho_workdrive_client_id: str | None = None
+    zoho_workdrive_client_secret: str | None = None
+    imanage_client_id: str | None = None
+    imanage_client_secret: str | None = None
+    imanage_base_url: str | None = None
+    onehub_client_id: str | None = None
+    onehub_client_secret: str | None = None
+    salesforce_files_client_id: str | None = None
+    salesforce_files_client_secret: str | None = None
+    oracle_content_management_client_id: str | None = None
+    oracle_content_management_client_secret: str | None = None
+    oracle_content_management_base_url: str | None = None
+    oracle_content_management_idcs_url: str | None = None
+    kiteworks_client_id: str | None = None
+    kiteworks_client_secret: str | None = None
+    kiteworks_base_url: str | None = None
+    evernote_teams_client_id: str | None = None
+    evernote_teams_client_secret: str | None = None
+    saml_enabled: bool | None = None
+    saml_idp_entity_id: str | None = None
+    saml_idp_sso_url: str | None = None
+    saml_idp_x509_cert: str | None = None
+    saml_default_group_id: str | None = None
     docusign_integration_key: str | None = None
     docusign_user_id: str | None = None
     docusign_account_id: str | None = None
@@ -475,6 +616,10 @@ class ResourceMetadataSetRequest(BaseModel):
     resource_type: str = Field(default="file", pattern=r"^(file|folder)$")
     class_id: str | None = None
     values: dict[str, Any] = {}
+    # Only meaningful when resource_type == "folder": also stamp this same
+    # class_id/values onto every file and subfolder anywhere in this
+    # folder's subtree, not just the folder resource itself.
+    apply_to_children: bool = False
 
 
 class ResourceMetadataOut(BaseModel):
@@ -485,32 +630,83 @@ class ResourceMetadataOut(BaseModel):
     class_id: str | None = None
     values: dict[str, Any] = {}
     updated_at: str
+    # Set only when apply_to_children was used -- how many descendant
+    # files/folders also got this class_id/values stamped onto them.
+    applied_to_count: int | None = None
+
+
+class ResourceMetadataHistoryEntryOut(BaseModel):
+    id: str
+    resource_id: str
+    resource_type: str
+    old_class_id: str | None = None
+    new_class_id: str | None = None
+    old_values: dict[str, Any] = {}
+    new_values: dict[str, Any] = {}
+    changed_by: str | None = None
+    changed_at: str
 
 
 # --- webhooks --------------------------------------------------------------
 
 class WebhookCreateRequest(BaseModel):
     url: str = Field(min_length=8, max_length=500)
-    secret: str = Field(min_length=8, max_length=200)
+    # Declared before `secret` so its already-validated value is visible to
+    # _require_secret_for_custom() via ValidationInfo.data (Pydantic
+    # validates fields in declaration order).
+    destination_type: Literal["custom", "slack", "discord"] = "custom"
+    # Only required for "custom" -- a Slack/Discord webhook URL is already
+    # self-authenticating (the URL itself is the secret), so HMAC signing
+    # doesn't apply there.
+    secret: str | None = Field(default=None, max_length=200)
     event_types: list[str] = []
+    # Mandatory: which file/folder this fires for. An unscoped webhook
+    # fires on every event across every connection, which is rarely what
+    # anyone actually wants and too easy to create by accident.
+    connection_id: str = Field(min_length=1)
+    resource_id: str = Field(min_length=1)
+    resource_type: str = Field(min_length=1)
+    resource_name: str = Field(min_length=1)
+
+    # A plain @field_validator("secret") would not catch this: Pydantic v2
+    # skips field validators for a field left at its default (unset) value
+    # unless validate_default=True is set on it -- since "secret" omitted
+    # entirely is exactly the case that needs catching here, a
+    # model_validator (which always runs) is used instead.
+    @model_validator(mode="after")
+    def _require_secret_for_custom(self) -> "WebhookCreateRequest":
+        if self.destination_type == "custom" and (not self.secret or len(self.secret) < 8):
+            raise ValueError("secret must be at least 8 characters for a custom webhook")
+        return self
 
 
 class WebhookUpdateRequest(BaseModel):
     url: str | None = None
+    destination_type: Literal["custom", "slack", "discord"] | None = None
     secret: str | None = None
     event_types: list[str] | None = None
     active: bool | None = None
+    connection_id: str | None = None
+    resource_id: str | None = None
+    resource_type: str | None = None
+    resource_name: str | None = None
+    clear_scope: bool = False  # explicit, since omitting the scope fields above must mean "leave as-is," not "remove"
 
 
 class WebhookOut(BaseModel):
     id: str
     url: str
-    secret: str
+    secret: str | None = None
+    destination_type: str = "custom"
     event_types: list[str] = []
     active: bool
     created_at: str
     last_triggered_at: str | None = None
     last_status_code: int | None = None
+    connection_id: str | None = None
+    resource_id: str | None = None
+    resource_type: str | None = None
+    resource_name: str | None = None
 
 
 # --- workflows -------------------------------------------------------------
@@ -614,4 +810,295 @@ class RetentionRecordOut(BaseModel):
     status: str
     legal_hold: bool
     actioned_at: str | None = None
+
+
+# --- AI agents ---------------------------------------------------------
+
+class AiAgentCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=500)
+    scope_type: str = Field(pattern=r"^(folder|file)$")
+    resource_id: str
+    resource_name: str = ""
+
+
+class AiAgentUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    description: str | None = Field(default=None, max_length=500)
+    is_active: bool | None = None
+
+
+class AiAgentOut(BaseModel):
+    id: str
+    name: str
+    description: str
+    connection_id: str
+    provider_key: str
+    scope_type: str
+    resource_id: str
+    resource_name: str
+    owner: str
+    is_active: bool
     created_at: str
+    updated_at: str
+    chat_url: str
+    embed_url: str
+    demo_url: str
+    demo_download_url: str
+
+
+class AiAgentStatsOut(AiAgentOut):
+    chat_count: int
+    tokens_total: int
+    last_chat_at: str | None = None
+    lead_count: int = 0
+
+
+class AiAgentChatRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=2000)
+
+
+class AiAgentChatOut(BaseModel):
+    answer: str
+    sources: list[str] = []
+    tokens_used: int | None = None
+    tokens_estimated: bool = True
+
+
+class AiAgentLeadCreateRequest(BaseModel):
+    email: str | None = Field(default=None, max_length=254)
+    phone: str | None = Field(default=None, max_length=40)
+    message: str = Field(min_length=1, max_length=2000)
+
+
+class AiAgentLeadOut(BaseModel):
+    id: str
+    agent_id: str
+    email: str | None = None
+    phone: str | None = None
+    message: str
+    created_at: str
+
+
+class AiAgentImageOut(BaseModel):
+    """What the pencil editor's image-upload modal gets back -- `url` is
+    what it hands straight to Quill's insertEmbed()."""
+    id: str
+    url: str
+    content_type: str
+    size_bytes: int
+
+
+class AiAgentSiteOut(BaseModel):
+    headline: str | None = None
+    subheadline: str | None = None
+    body: str | None = None
+    accent_color: str | None = None
+    contact_email: str | None = None
+    contact_phone: str | None = None
+    contact_address: str | None = None
+    contact_note: str | None = None
+    seo_description: str | None = None
+    footer_tagline: str | None = None
+    updated_at: str | None = None
+
+
+class AiAgentSiteUpdateRequest(BaseModel):
+    headline: str | None = Field(default=None, max_length=200)
+    subheadline: str | None = Field(default=None, max_length=300)
+    # Declared before `body` so its already-validated value is visible to
+    # _sanitize_body() via ValidationInfo.data (Pydantic validates fields
+    # in declaration order) -- both the admin bar's on-page pencil editor
+    # and its Customize panel now write real HTML through a Quill editor
+    # and set this true; only a legacy body saved before either existed
+    # is still plain text, so bleach only runs when there's actually HTML
+    # to sanitize.
+    is_rich_html: bool = False
+    body: str | None = Field(default=None, max_length=8000)  # rich HTML from the pencil editor costs more chars than plain text
+    accent_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$")
+    contact_email: str | None = Field(default=None, max_length=200)
+    contact_phone: str | None = Field(default=None, max_length=60)
+    contact_address: str | None = Field(default=None, max_length=300)
+    contact_note: str | None = Field(default=None, max_length=300)
+    seo_description: str | None = Field(default=None, max_length=300)
+    footer_tagline: str | None = Field(default=None, max_length=160)
+
+    @field_validator("body")
+    @classmethod
+    def _sanitize_body(cls, v: str | None, info: ValidationInfo) -> str | None:
+        return sanitize_rich_html(v) if info.data.get("is_rich_html") else v
+
+
+class AiAgentEditTokenOut(BaseModel):
+    edit_token: str
+    expires_at: str
+
+
+class PublicAiAgentSiteUpdateRequest(AiAgentSiteUpdateRequest):
+    edit_token: str
+
+
+# --- AI agent site pages / blog ----------------------------------------
+
+class AiAgentPageCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    is_rich_html: bool = False  # see AiAgentSiteUpdateRequest.is_rich_html
+    content: str = Field(default="", max_length=20_000)
+    nav_order: int = 0
+
+    @field_validator("content")
+    @classmethod
+    def _sanitize_content(cls, v: str, info: ValidationInfo) -> str:
+        return (sanitize_rich_html(v) or "") if info.data.get("is_rich_html") else v
+
+
+class AiAgentPageUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    is_rich_html: bool = False  # see AiAgentSiteUpdateRequest.is_rich_html
+    content: str | None = Field(default=None, max_length=20_000)
+    nav_order: int | None = None
+
+    @field_validator("content")
+    @classmethod
+    def _sanitize_content(cls, v: str | None, info: ValidationInfo) -> str | None:
+        return sanitize_rich_html(v) if info.data.get("is_rich_html") else v
+
+
+class AiAgentPageOut(BaseModel):
+    id: str
+    agent_id: str
+    slug: str
+    title: str
+    content: str
+    nav_order: int
+    created_at: str
+    updated_at: str
+
+
+class AiAgentPostCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    excerpt: str = Field(default="", max_length=500)
+    is_rich_html: bool = False  # see AiAgentSiteUpdateRequest.is_rich_html
+    content: str = Field(default="", max_length=20_000)
+
+    @field_validator("content")
+    @classmethod
+    def _sanitize_content(cls, v: str, info: ValidationInfo) -> str:
+        return (sanitize_rich_html(v) or "") if info.data.get("is_rich_html") else v
+
+
+class AiAgentPostUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=200)
+    excerpt: str | None = Field(default=None, max_length=500)
+    is_rich_html: bool = False  # see AiAgentSiteUpdateRequest.is_rich_html
+    content: str | None = Field(default=None, max_length=20_000)
+
+    @field_validator("content")
+    @classmethod
+    def _sanitize_content(cls, v: str | None, info: ValidationInfo) -> str | None:
+        return sanitize_rich_html(v) if info.data.get("is_rich_html") else v
+
+
+class AiAgentPostOut(BaseModel):
+    id: str
+    agent_id: str
+    slug: str
+    title: str
+    excerpt: str
+    content: str
+    published_at: str
+    updated_at: str
+
+
+class AiAgentSiteDraftPageOut(BaseModel):
+    title: str
+    content: str
+
+
+class AiAgentSiteDraftPostOut(BaseModel):
+    title: str
+    excerpt: str
+    content: str
+
+
+class AiAgentSiteDraftOut(BaseModel):
+    headline: str
+    subheadline: str
+    body: str
+    contact_note: str
+    seo_description: str = ""
+    footer_tagline: str = ""
+    pages: list[AiAgentSiteDraftPageOut] = []
+    posts: list[AiAgentSiteDraftPostOut] = []
+    sources: list[str] = []
+    tokens_used: int | None = None
+    tokens_estimated: bool = True
+
+
+# --- edit-token-gated variants, used by the live site's own admin bar --
+
+class PublicAiAgentPageCreateRequest(AiAgentPageCreateRequest):
+    edit_token: str
+
+
+class PublicAiAgentPageUpdateRequest(AiAgentPageUpdateRequest):
+    edit_token: str
+
+
+class PublicAiAgentPostCreateRequest(AiAgentPostCreateRequest):
+    edit_token: str
+
+
+class PublicAiAgentPostUpdateRequest(AiAgentPostUpdateRequest):
+    edit_token: str
+
+
+class AiAgentSitePublishedOut(BaseModel):
+    """What the admin bar's "Generate & publish" button gets back — the
+    generated draft was applied immediately (unlike the authenticated
+    /ai-agents/{id}/site/generate endpoint, which only proposes a draft
+    for the app's UI to apply piece-by-piece): there's no per-item review
+    UI to put on the live page itself, so a one-click "make this real"
+    action is what the admin bar offers instead."""
+    pages_created: int
+    posts_created: int
+    tokens_used: int | None = None
+    tokens_estimated: bool = True
+
+
+class PublicAiAgentTargetedEditRequest(BaseModel):
+    edit_token: str
+    instruction: str = Field(min_length=1, max_length=1000)
+
+
+class AiAgentTargetedEditResultOut(BaseModel):
+    """What the admin bar's "describe a specific change" box gets back —
+    a surgical alternative to AiAgentSitePublishedOut's whole-site
+    regenerate: only the site fields / pages / posts the instruction
+    actually named were touched, everything else is untouched."""
+    summary: str
+    site_updated: bool
+    pages_updated: int
+    posts_updated: int
+    tokens_used: int | None = None
+    tokens_estimated: bool = True
+
+
+class PublicAiAgentItemDraftRequest(BaseModel):
+    edit_token: str
+    kind: str = Field(pattern=r"^(page|post)$")
+    topic: str = Field(default="", max_length=200)
+
+
+class AiAgentItemDraftOut(BaseModel):
+    """What the "Add a page"/"Add a post" forms' own "Generate with AI"
+    button gets back -- nothing is saved yet, this just fills the
+    create-form's fields for the admin to review before clicking Add."""
+    title: str
+    content: str
+    excerpt: str | None = None
+
+
+class PublicAiAgentOut(BaseModel):
+    name: str
+    description: str

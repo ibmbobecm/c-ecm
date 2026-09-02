@@ -15,12 +15,12 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from .. import activity_service
-from ..auth import CurrentUser, require_role
+from ..auth import CurrentUser, require_feature
 from ..schemas import ActivityAlertOut, ActivityEventOut, ActivitySummaryOut
 
 router = APIRouter(prefix="/activity", tags=["activity"])
 
-_admin = require_role("admin")
+_admin = require_feature("view_activity_log")
 
 # Burst-detection thresholds for "alarming activity" — deliberately only
 # covering what this event log can actually support (no IP/geo data exists,

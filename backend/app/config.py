@@ -111,6 +111,15 @@ MS_TENANT = os.environ.get("FD_MS_TENANT", "common")
 BOX_CLIENT_ID = os.environ.get("FD_BOX_CLIENT_ID", "")
 BOX_CLIENT_SECRET = os.environ.get("FD_BOX_CLIENT_SECRET", "")
 
+DROPBOX_CLIENT_ID = os.environ.get("FD_DROPBOX_CLIENT_ID", "")
+DROPBOX_CLIENT_SECRET = os.environ.get("FD_DROPBOX_CLIENT_SECRET", "")
+
+LASERFICHE_CLIENT_ID = os.environ.get("FD_LASERFICHE_CLIENT_ID", "")
+LASERFICHE_CLIENT_SECRET = os.environ.get("FD_LASERFICHE_CLIENT_SECRET", "")
+
+SHAREFILE_CLIENT_ID = os.environ.get("FD_SHAREFILE_CLIENT_ID", "")
+SHAREFILE_CLIENT_SECRET = os.environ.get("FD_SHAREFILE_CLIENT_SECRET", "")
+
 # --- E-signature: DocuSign (integration, not a reimplementation) ---
 # DocuSign's JWT Grant ("Service Integration") flow, not the interactive
 # Authorization Code popup the storage OAuth providers above use — sending

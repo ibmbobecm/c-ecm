@@ -23,8 +23,12 @@ export function FileApprovalsPanel({
   definitions: WorkflowDefinition[];
   onChanged?: () => void;
 }) {
-  const { user, hasRole } = useAuth();
-  const isAdmin = hasRole("admin");
+  const { user } = useAuth();
+  // Matches the backend's cancel_instance check exactly: the requester or
+  // a superadmin can cancel — not a delegable feature, since it's
+  // specifically "override anyone's request," the same bypass concept as
+  // every other superadmin-only override in this app.
+  const isAdmin = Boolean(user?.is_superadmin);
   const [instances, setInstances] = useState<WorkflowInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState<string | null>(null);

@@ -1,18 +1,23 @@
-"""C-ECM authentication — multi-user JWT sessions with role-based access control.
+"""C-ECM authentication — multi-user JWT sessions with group/feature-based
+access control (SAML SSO logs in through the same session mechanism, see
+saml_service.py / routers/saml.py).
 
 Login flow:
-  1. POST /auth/login  →  validate against users_store  →  JWT + session id
-  2. Every request: Bearer JWT  →  validate  →  session in _app_sessions
-  3. Content requests also carry X-Connection-Id  →  resolved to a provider
+  1. POST /auth/login (or a successful SAML ACS callback) → validate → a
+     session is started via start_session() → JWT + session id
+  2. Every request: Bearer JWT → validate → session in _app_sessions
+  3. Content requests also carry X-Connection-Id → resolved to a provider
 
-Role guard:
-  require_role("admin")  →  Depends()-able FastAPI dependency
-  require_role("editor") →  ditto
-  Any route that doesn't call require_role accepts any authenticated user.
+Access guard:
+  require_feature("manage_x")  →  Depends()-able FastAPI dependency.
+  Superadmins (CurrentUser["is_superadmin"]) bypass every feature check.
+  Everyone else needs the feature via at least one group they belong to
+  (groups_store.user_has_feature). Any route that doesn't call
+  require_feature accepts any authenticated user — unchanged from before.
 
-CurrentUser is a plain dict from users_store (keys: id, username, roles, …).
-CurrentSession includes the CurrentUser so routers can access both in one
-Depends() call.
+CurrentUser is a plain dict from users_store (keys: id, username,
+is_superadmin, …). CurrentSession includes the CurrentUser so routers can
+access both in one Depends() call.
 """
 
 import datetime
@@ -24,7 +29,7 @@ import jwt
 from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from . import activity_service, connections_store, users_store
+from . import activity_service, connections_store, groups_store, users_store
 from .config import JWT_ALGORITHM, JWT_EXPIRE_MINUTES, JWT_SECRET
 from .storage_providers.base import ProviderError, StorageProvider
 from .storage_providers.registry import get_provider
@@ -87,6 +92,21 @@ def _log_auth_event(event_type: str, username: str, user_id: str | None = None) 
     )
 
 
+def start_session(user: dict, event_type: str = "login") -> str:
+    """Mints a new C-ECM session for an already-authenticated user and
+    returns its JWT. Shared by password login (app_login) and SAML login
+    (routers/saml.py's ACS handler) so both issue sessions the exact same
+    way — same in-memory _app_sessions tracking, same audit event, same
+    token shape."""
+    import secrets
+    session_id = secrets.token_hex(16)
+    with _app_sessions_lock:
+        _app_sessions[session_id] = user["username"]
+    token = _create_token(session_id)
+    _log_auth_event(event_type, user["username"], user["id"])
+    return token
+
+
 def app_login(username: str, password: str) -> tuple[str, dict]:
     """Returns (jwt_token, user_dict) or raises HTTPException."""
     _check_login_rate_limit(username)
@@ -96,12 +116,7 @@ def app_login(username: str, password: str) -> tuple[str, dict]:
         _log_auth_event("login_failed", username)
         raise HTTPException(status_code=401, detail="Invalid username or password")
     _clear_login_attempts(username)
-    import secrets
-    session_id = secrets.token_hex(16)
-    with _app_sessions_lock:
-        _app_sessions[session_id] = user["username"]
-    token = _create_token(session_id)
-    _log_auth_event("login", user["username"], user["id"])
+    token = start_session(user)
     return token, user
 
 
@@ -153,13 +168,17 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(_securi
     return user
 
 
-def require_role(role: str):
-    """Returns a FastAPI dependency that enforces the given role."""
+def require_feature(feature_key: str):
+    """Returns a FastAPI dependency that enforces the given feature.
+    Superadmins bypass this unconditionally; everyone else needs the
+    feature via at least one group they belong to."""
     def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
-        if role not in user.get("roles", []):
+        if user.get("is_superadmin"):
+            return user
+        if not groups_store.user_has_feature(user["id"], feature_key):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"This action requires the '{role}' role",
+                detail=f"This action requires the '{feature_key}' feature",
             )
         return user
     return _check

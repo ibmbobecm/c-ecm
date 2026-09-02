@@ -32,6 +32,8 @@ const EVENT_LABELS: Record<string, string> = {
   share_link_created: "Share link created",
   legal_hold_set: "Legal hold set",
   legal_hold_released: "Legal hold released",
+  ai_agent_created: "AI Agent created",
+  ai_agent_chat: "AI Agent chat",
 };
 
 function eventLabel(t: string): string {
@@ -56,6 +58,7 @@ const EVENT_TYPE_GROUPS: { label: string; types: string[] }[] = [
   },
   { label: "Collaboration", types: ["commented", "tagged", "share_link_created"] },
   { label: "Compliance", types: ["legal_hold_set", "legal_hold_released"] },
+  { label: "AI Agents", types: ["ai_agent_created", "ai_agent_chat"] },
 ];
 
 function todayStr(): string {
@@ -69,7 +72,7 @@ function daysAgoStr(n: number): string {
 
 const PAGE_SIZE = 50;
 
-export function AuditLogPage({ onBack }: { onBack: () => void }) {
+export function AuditLogPage() {
   const { connections } = useConnections();
   const connectionName = (id: string | null) => (id ? connections.find((c) => c.id === id)?.display_name ?? id : "—");
 
@@ -161,9 +164,6 @@ export function AuditLogPage({ onBack }: { onBack: () => void }) {
   return (
     <div className="audit-page">
       <div className="audit-topbar">
-        <button className="icon-btn" onClick={onBack} aria-label="Back to Drive" title="Back to Drive">
-          <Icon name="chevron-right" size={16} className="viewer-back-icon" />
-        </button>
         <h2 className="audit-title">Reports</h2>
         <button className="btn-secondary" onClick={exportCsv}>
           <Icon name="download" size={15} />

@@ -10,6 +10,8 @@ store, root path) in `creds` — nothing here assumes there's only one FileNet
 installation. `_conn()` rebuilds a `fnc.FileNetConn` from that on every call.
 """
 
+import threading
+
 from .. import filenet_client as fnc
 from ..config import (
     FILENET_ENDPOINT_URL,
@@ -32,6 +34,19 @@ from .base import (
 )
 
 _TRASH_NAME = "$Trash"
+
+# (object_store, root_path) pairs already verified/created in this process.
+# A connection's stored creds only pin username/password by default — root_path
+# falls back to the live FILENET_ROOT_PATH config default on every call. That
+# default used to only get ensured once, in authenticate(), so a connection
+# created before a config change (e.g. the FileDrive -> C-ECM rebrand moving
+# the default from /FileDrive to /C-ECM) silently 404s on every subsequent
+# call once the default changes, because the new path was never created for
+# it. Ensuring it lazily here, from the one choke point every operation
+# resolves a folder path through, makes that self-healing regardless of when
+# the connection was created or whether the default changes again later.
+_ensured_roots: set[tuple[str, str]] = set()
+_ensured_roots_lock = threading.Lock()
 
 
 def _wrap(exc: fnc.FileNetError, not_found_detail: str = "Not found") -> ProviderError:
@@ -156,9 +171,21 @@ class FileNetProvider(StorageProvider):
     def _trash_path(self, creds: dict) -> str:
         return f"{self._conn(creds).root_path}/{_TRASH_NAME}"
 
+    def _ensure_root(self, conn: fnc.FileNetConn) -> None:
+        key = (conn.object_store, conn.root_path)
+        if key in _ensured_roots:
+            return
+        with _ensured_roots_lock:
+            if key in _ensured_roots:
+                return
+            self._ensure_path(conn, conn.root_path)
+            _ensured_roots.add(key)
+
     def _folder_path(self, creds: dict, folder_id: str | None) -> str:
         if folder_id is None:
-            return self._conn(creds).root_path
+            conn = self._conn(creds)
+            self._ensure_root(conn)
+            return conn.root_path
         try:
             obj = fnc.get_object(self._conn(creds), "Folder", folder_id, ["Id", "PathName"])
         except fnc.FileNetError as exc:
@@ -184,8 +211,10 @@ class FileNetProvider(StorageProvider):
         return crumbs
 
     def _ensure_trash(self, creds: dict) -> str:
+        conn = self._conn(creds)
+        self._ensure_root(conn)
         try:
-            fnc.create_folder(self._conn(creds), self._conn(creds).root_path, _TRASH_NAME)
+            fnc.create_folder(conn, conn.root_path, _TRASH_NAME)
         except fnc.FileNetError:
             pass
         return self._trash_path(creds)

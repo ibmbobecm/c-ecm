@@ -5,7 +5,6 @@
 import { useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPatch, apiPost, ApiError } from "../api/client";
 import type { RetentionPolicy, RetentionRecord } from "../types";
-import { Modal } from "./Modal";
 import { Icon } from "../icons";
 import { formatDate } from "../utils";
 
@@ -23,7 +22,7 @@ function ActionBadge({ action }: { action: RetentionPolicy["action"] }) {
   );
 }
 
-export function RetentionPolicyPanel({ onClose }: { onClose: () => void }) {
+export function RetentionPolicyPanel() {
   const [policies, setPolicies] = useState<RetentionPolicy[]>([]);
   const [records, setRecords] = useState<RetentionRecord[]>([]);
   const [tab, setTab] = useState<"policies" | "records">("policies");
@@ -112,7 +111,7 @@ export function RetentionPolicyPanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <Modal title="Retention Policies" onClose={onClose} width={640}>
+    <div className="settings-tab-pane">
       <div style={{ display: "flex", gap: 0, marginBottom: 20, borderBottom: "1px solid var(--border)" }}>
         {(["policies", "records"] as const).map((t) => (
           <button
@@ -207,42 +206,44 @@ export function RetentionPolicyPanel({ onClose }: { onClose: () => void }) {
         ) : records.length === 0 ? (
           <p className="muted" style={{ textAlign: "center", padding: 32 }}>No documents enrolled in a retention policy yet.</p>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid var(--border)" }}>
-                <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Document</th>
-                <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Due date</th>
-                <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Status</th>
-                <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Hold</th>
-              </tr>
-            </thead>
-            <tbody>
-              {records.map((r) => (
-                <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
-                  <td style={{ padding: "8px 8px" }}>
-                    <div style={{ fontWeight: 500 }}>{r.resource_name ?? r.resource_id}</div>
-                    <div className="muted" style={{ fontSize: 11 }}>{r.resource_type}</div>
-                  </td>
-                  <td style={{ padding: "8px 8px", fontSize: 12, color: new Date(r.due_date) <= new Date() ? "#e53e3e" : "inherit" }}>
-                    {formatDate(r.due_date)}
-                  </td>
-                  <td style={{ padding: "8px 8px", fontSize: 12 }}>{r.status}</td>
-                  <td style={{ padding: "8px 8px" }}>
-                    <button
-                      className="icon-btn"
-                      title={r.legal_hold ? "Remove legal hold" : "Place on legal hold"}
-                      style={{ color: r.legal_hold ? "#e53e3e" : "var(--muted)" }}
-                      onClick={() => toggleLegalHold(r)}
-                    >
-                      <Icon name={r.legal_hold ? "lock" : "unlock"} size={14} />
-                    </button>
-                  </td>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", minWidth: 480, borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid var(--border)" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Document</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Due date</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Status</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontWeight: 600 }}>Hold</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {records.map((r) => (
+                  <tr key={r.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <td style={{ padding: "8px 8px" }}>
+                      <div style={{ fontWeight: 500 }}>{r.resource_name ?? r.resource_id}</div>
+                      <div className="muted" style={{ fontSize: 11 }}>{r.resource_type}</div>
+                    </td>
+                    <td style={{ padding: "8px 8px", fontSize: 12, color: new Date(r.due_date) <= new Date() ? "#e53e3e" : "inherit" }}>
+                      {formatDate(r.due_date)}
+                    </td>
+                    <td style={{ padding: "8px 8px", fontSize: 12 }}>{r.status}</td>
+                    <td style={{ padding: "8px 8px" }}>
+                      <button
+                        className="icon-btn"
+                        title={r.legal_hold ? "Remove legal hold" : "Place on legal hold"}
+                        style={{ color: r.legal_hold ? "#e53e3e" : "var(--muted)" }}
+                        onClick={() => toggleLegalHold(r)}
+                      >
+                        <Icon name={r.legal_hold ? "lock" : "unlock"} size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )
       )}
-    </Modal>
+    </div>
   );
 }

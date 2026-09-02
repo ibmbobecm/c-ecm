@@ -80,7 +80,11 @@ function authHeaders(): Record<string, string> {
   return headers;
 }
 
-export async function apiGet<T>(path: string, params?: Record<string, string | number | string[] | undefined>): Promise<T> {
+export async function apiGet<T>(
+  path: string,
+  params?: Record<string, string | number | string[] | undefined>,
+  connectionIdOverride?: string,
+): Promise<T> {
   const url = new URL(API_BASE + path);
   if (params) {
     for (const [k, v] of Object.entries(params)) {
@@ -95,7 +99,12 @@ export async function apiGet<T>(path: string, params?: Record<string, string | n
       }
     }
   }
-  const res = await fetch(url, { headers: authHeaders() });
+  const headers = authHeaders();
+  // Browsing a connection other than the one active in the main Drive view
+  // (e.g. picking a folder to scope a webhook to) without disturbing that
+  // global active-connection state.
+  if (connectionIdOverride) headers["X-Connection-Id"] = connectionIdOverride;
+  const res = await fetch(url, { headers });
   return handle<T>(res);
 }
 

@@ -2,8 +2,8 @@
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import activity_service, notification_service, workflows_store
-from ..auth import CurrentSession, CurrentUser, get_current_session, get_current_user, require_role
+from .. import access_control, activity_service, notification_service, workflows_store
+from ..auth import CurrentSession, CurrentUser, get_current_session, get_current_user, require_feature
 from ..schemas import (
     WorkflowDefinitionCreateRequest,
     WorkflowDefinitionOut,
@@ -14,7 +14,7 @@ from ..schemas import (
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
 
-_admin = require_role("admin")
+_admin = require_feature("manage_workflow_definitions")
 
 
 def _actor(session: CurrentSession) -> str:
@@ -64,6 +64,7 @@ def list_instances(
 
 @router.post("/instances", response_model=WorkflowInstanceOut, status_code=201)
 def start_workflow(req: WorkflowInstanceCreateRequest, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, req.resource_id, req.resource_type, "edit")
     if workflows_store.get_definition(req.definition_id) is None:
         raise HTTPException(status_code=404, detail="Workflow definition not found")
     # Try to get a friendly resource name
@@ -156,9 +157,9 @@ def cancel_instance(instance_id: str, session: CurrentSession = Depends(get_curr
     inst = workflows_store.get_instance(instance_id)
     if inst is None:
         raise HTTPException(status_code=404, detail="Workflow instance not found")
-    is_admin = "admin" in session.user.get("roles", [])
-    if inst["requested_by"] != _actor(session) and not is_admin:
-        raise HTTPException(status_code=403, detail="Only the requester or an admin can cancel this request")
+    is_superadmin = session.user.get("is_superadmin", False)
+    if inst["requested_by"] != _actor(session) and not is_superadmin:
+        raise HTTPException(status_code=403, detail="Only the requester or a superadmin can cancel this request")
     updated = workflows_store.cancel_instance(instance_id)
     if updated is None:
         raise HTTPException(status_code=404, detail="Workflow instance not found or already completed")

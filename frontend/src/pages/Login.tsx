@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useAuth } from "../contexts/AuthContext";
-import { ApiError } from "../api/client";
+import { API_BASE, apiGet, ApiError } from "../api/client";
 
 export function Login({ onBack }: { onBack?: () => void }) {
   const { login } = useAuth();
@@ -8,6 +8,13 @@ export function Login({ onBack }: { onBack?: () => void }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ssoEnabled, setSsoEnabled] = useState(false);
+
+  useEffect(() => {
+    apiGet<{ enabled: boolean }>("/saml/status")
+      .then((s) => setSsoEnabled(s.enabled))
+      .catch(() => setSsoEnabled(false));
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -48,6 +55,24 @@ export function Login({ onBack }: { onBack?: () => void }) {
         <button type="submit" disabled={busy}>
           {busy ? "Signing in..." : "Sign in"}
         </button>
+
+        {ssoEnabled && (
+          <>
+            <div className="auth-divider">or</div>
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => {
+                // Full top-level navigation, not a fetch — SAML is a
+                // browser-redirect protocol, and this leaves the SPA
+                // entirely until /sso-complete.html brings the user back.
+                window.location.href = `${API_BASE}/saml/login`;
+              }}
+            >
+              Sign in with SSO
+            </button>
+          </>
+        )}
       </form>
     </div>
   );

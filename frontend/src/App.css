@@ -188,15 +188,18 @@ select {
 /* ---------- Auth ---------- */
 
 .auth-page {
-  height: 100vh;
+  min-height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
   background: var(--bg-secondary);
+  padding: var(--space-4);
+  box-sizing: border-box;
 }
 
 .auth-card {
   width: 400px;
+  max-width: 100%;
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -205,6 +208,7 @@ select {
   flex-direction: column;
   gap: var(--space-3);
   box-shadow: var(--shadow-3);
+  box-sizing: border-box;
 }
 
 .auth-card h1 {
@@ -233,18 +237,27 @@ select {
 }
 
 .auth-card input,
-.auth-form input {
+.auth-form input,
+.auth-form select,
+.auth-form textarea {
   padding: 10px var(--space-3);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   font-size: var(--text-base);
+  font-family: inherit;
   color: var(--text);
   background: var(--surface);
   transition: border-color var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard);
 }
 
+.auth-form textarea {
+  resize: vertical;
+}
+
 .auth-card input:focus,
-.auth-form input:focus {
+.auth-form input:focus,
+.auth-form select:focus,
+.auth-form textarea:focus {
   outline: none;
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-tint);
@@ -297,6 +310,42 @@ select {
 
 .auth-back-link:hover {
   color: var(--text);
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.auth-card .btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard);
+}
+
+.auth-card .btn-secondary:hover {
+  background: var(--bg-secondary);
+  border-color: var(--accent);
 }
 
 .auth-error {
@@ -396,12 +445,6 @@ select {
   gap: var(--space-3);
 }
 
-.admin-settings-intro {
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  margin: 0 0 18px;
-}
-
 .admin-settings-banner {
   font-size: var(--text-sm);
   line-height: 1.5;
@@ -410,12 +453,6 @@ select {
   border-radius: var(--radius-sm);
   background: var(--accent-tint);
   color: var(--text);
-}
-
-.admin-settings-showall {
-  display: block;
-  margin: 0 0 var(--space-4);
-  font-size: var(--text-xs);
 }
 
 .admin-settings-form fieldset {
@@ -457,7 +494,13 @@ select {
   display: flex;
   flex-direction: column;
   padding: var(--space-4) 12px;
-  transition: background-color var(--duration-settle) var(--ease-standard), border-color var(--duration-settle) var(--ease-standard);
+  transition: width var(--duration-settle) var(--ease-standard), background-color var(--duration-settle) var(--ease-standard), border-color var(--duration-settle) var(--ease-standard);
+}
+
+.sidebar.collapsed {
+  width: 68px;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 
 .sidebar-brand {
@@ -471,6 +514,50 @@ select {
 
 .sidebar-brand-name {
   flex: 1;
+}
+
+.sidebar-collapse-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.sidebar-collapse-btn:hover {
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+
+.sidebar-collapse-icon {
+  transform: rotate(180deg);
+}
+
+/* Collapsed: icon-only rail -- every text label (nav items, connection
+   names, section headings, the signed-in user's name, "Sign out") hides,
+   leaving just icons/badges centered in the narrow column. The New menu's
+   dropdown panel is unaffected since it floats outside the rail itself. */
+.sidebar.collapsed .sidebar-brand-name,
+.sidebar.collapsed .sidebar-label,
+.sidebar.collapsed .sidebar-section-label,
+.sidebar.collapsed .sidebar-user,
+.sidebar.collapsed .sidebar-connections-empty {
+  display: none;
+}
+
+.sidebar.collapsed .sidebar-nav button,
+.sidebar.collapsed .sidebar-connections-nav button,
+.sidebar.collapsed .new-menu-trigger,
+.sidebar.collapsed .sidebar-logout {
+  justify-content: center;
+}
+
+.sidebar.collapsed .sidebar-user-row {
+  justify-content: center;
 }
 
 /* ---------- Notifications ---------- */
@@ -506,6 +593,7 @@ select {
   top: calc(100% + 8px);
   left: 0;
   width: 320px;
+  max-width: calc(100vw - 32px);
   max-height: 420px;
   background: var(--surface-2);
   border: 1px solid var(--border);
@@ -613,60 +701,22 @@ select {
 }
 
 .sidebar-connections-nav {
-  flex: 0 0 auto !important;
-  max-height: 200px;
+  /* Sits below the Trash/Approvals/Global Search nav now, right above the
+     footer -- flex-grow (with min-height:0, the standard fix for a flex
+     child's own overflow:auto to actually kick in) lets it fill whatever
+     space is left and scroll internally if the connection list is long,
+     instead of a fixed-height box leaving a dead gap above the footer. */
+  flex: 1 1 auto !important;
+  min-height: 0;
   overflow-y: auto;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: var(--space-2);
-  margin-bottom: var(--space-2);
+  border-top: 1px solid var(--border);
+  padding-top: var(--space-2);
+  margin-top: var(--space-2);
 }
 
 .sidebar-connections-empty {
   font-size: var(--text-sm);
   padding: 2px var(--space-3) 4px;
-}
-
-/* ---------- Admin gear menu ---------- */
-
-.admin-menu-wrap {
-  position: relative;
-}
-
-.admin-menu-panel {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  right: 0;
-  min-width: 190px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow-3);
-  padding: 6px;
-  z-index: 250;
-  display: flex;
-  flex-direction: column;
-  animation: menu-in var(--duration-fast) var(--ease-out);
-}
-
-.admin-menu-panel .sidebar-section-label {
-  padding: 4px 10px 6px;
-}
-
-.admin-menu-panel button {
-  background: none;
-  border: none;
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 6px;
-  font-size: var(--text-sm);
-  color: var(--text);
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.admin-menu-panel button:hover {
-  background: var(--bg-tertiary);
 }
 
 .connections-list {
@@ -757,11 +807,59 @@ select {
   cursor: not-allowed;
 }
 
+.new-menu-wrap {
+  position: relative;
+}
+
+.new-menu-trigger {
+  width: 100%;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.new-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  min-width: 190px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-3);
+  padding: 6px;
+  z-index: 250;
+  display: flex;
+  flex-direction: column;
+  animation: menu-in var(--duration-fast) var(--ease-out);
+}
+
+.new-menu-panel button {
+  background: none;
+  border: none;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: var(--text-sm);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.new-menu-panel button:hover {
+  background: var(--bg-tertiary);
+}
+
 .sidebar-nav {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  flex: 1;
+  /* Not flex-grow here: this now sits between the New button and the
+     Connections list rather than being the last item before the footer,
+     so it should take its natural height -- .sidebar-connections-nav is
+     the one that grows to fill remaining space now. */
+  flex: 0 0 auto;
 }
 
 .sidebar-nav button {
@@ -1061,7 +1159,7 @@ select {
   border: 1px solid var(--border);
   border-top: none;
   border-radius: 0 0 var(--radius-sm) var(--radius-sm);
-  overflow: hidden;
+  overflow: auto;
 }
 
 .gs-group-error {
@@ -1125,6 +1223,7 @@ select {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
+  white-space: nowrap;
   min-width: 0;
 }
 
@@ -1158,7 +1257,7 @@ select {
 .breadcrumb-sep {
   color: var(--text-tertiary);
   margin: 0 2px;
-  display: flex;
+  display: inline-flex;
   flex-shrink: 0;
 }
 
@@ -1422,7 +1521,9 @@ select {
 
 .item-list-wrap {
   overflow-y: auto;
+  overflow-x: auto;
   flex: 1;
+  min-width: 0;
   padding: 0 var(--space-5);
 }
 
@@ -1775,6 +1876,96 @@ select {
   gap: 14px;
 }
 
+/* ---------- AI Agents ---------- */
+
+.ai-agent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.ai-agent-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ai-agent-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.ai-agent-card-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.ai-agent-card-name {
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.ai-agent-card-desc {
+  font-size: 12px;
+  margin-top: 1px;
+}
+
+.ai-agent-badge-inactive {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--warning);
+  background: var(--warning-tint);
+  border-radius: var(--radius-full);
+  padding: 2px 8px;
+}
+
+.ai-agent-card-stats {
+  font-size: 12px;
+}
+
+.ai-agent-card-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.ai-agent-card-field-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.ai-agent-card-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-agent-card-url {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--accent);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-agent-card-actions {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
 input[type="checkbox"] {
   accent-color: var(--accent);
   width: 16px;
@@ -2044,6 +2235,9 @@ input[type="checkbox"] {
   color: var(--accent);
   font-size: var(--text-sm);
   padding: 2px 4px;
+  text-decoration: none;
+  cursor: pointer;
+  display: inline-block;
 }
 
 .link-btn:hover {
@@ -2124,6 +2318,44 @@ input[type="checkbox"] {
 
 .move-folder-row:hover {
   background: var(--bg-tertiary);
+}
+
+.picker-breadcrumb {
+  font-size: var(--text-xs);
+  margin-bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.picker-breadcrumb-segment {
+  display: inline-flex;
+  align-items: center;
+}
+
+.picker-breadcrumb-sep {
+  color: var(--text-tertiary);
+  margin: 0 2px;
+}
+
+.picker-list {
+  min-height: 120px;
+}
+
+.picker-empty {
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-tertiary);
+  text-align: center;
+  padding: var(--space-4);
+}
+
+.picker-empty p {
+  margin: 0;
 }
 
 /* ---------- Preview modal ---------- */
@@ -2327,7 +2559,7 @@ input[type="checkbox"] {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-4) var(--space-6);
-  max-width: 1100px;
+  max-width: 1280px;
   margin: 0 auto;
 }
 
@@ -2342,7 +2574,7 @@ input[type="checkbox"] {
 }
 
 .landing-hero {
-  max-width: 780px;
+  max-width: 920px;
   margin: 0 auto;
   padding: var(--space-7) var(--space-6) var(--space-6);
   text-align: center;
@@ -2377,7 +2609,7 @@ input[type="checkbox"] {
   font-size: var(--text-md);
   line-height: 1.6;
   color: var(--text-secondary);
-  max-width: 620px;
+  max-width: 680px;
 }
 
 .landing-hero-actions {
@@ -2391,7 +2623,7 @@ input[type="checkbox"] {
 }
 
 .landing-backends {
-  max-width: 1100px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: var(--space-6) var(--space-6);
   border-top: 1px solid var(--border);
@@ -2428,7 +2660,7 @@ input[type="checkbox"] {
 }
 
 .landing-features {
-  max-width: 1100px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: var(--space-7) var(--space-6);
 }
@@ -2487,7 +2719,7 @@ input[type="checkbox"] {
 }
 
 .landing-cta-band {
-  max-width: 700px;
+  max-width: 800px;
   margin: 0 auto;
   padding: var(--space-7) var(--space-6);
   text-align: center;
@@ -2602,15 +2834,94 @@ input[type="checkbox"] {
   flex-shrink: 0;
 }
 
+/* ---------- Settings page (Box-style: one page, tabs across the top) ---------- */
+
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) 0;
+  flex-shrink: 0;
+}
+
+.settings-header h1 {
+  font-size: var(--text-lg);
+  margin: 0;
+}
+
+.settings-tabs {
+  display: flex;
+  gap: var(--space-5);
+  padding: var(--space-4) var(--space-4) 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+
+.settings-tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: none;
+  border: none;
+  padding: 0 2px 12px;
+  margin-bottom: -1px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.settings-tab-btn:hover {
+  color: var(--text);
+}
+
+.settings-tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.settings-tab-content {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+}
+
+/* The bare content of what used to be each section's own Modal — plain
+   padding + scroll instead of a centered dialog card, since the tab strip
+   above now provides the navigation a modal's title bar used to. */
+.settings-tab-pane {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: var(--space-5);
+}
+
 /* ---------- Admin audit log & reporting ---------- */
 
 .audit-page {
-  position: fixed;
-  inset: 0;
-  z-index: 260;
+  /* Used to be a full-viewport takeover (position:fixed; inset:0); now
+     it's embedded as the Reports/AI Agents tab's content inside
+     .settings-tab-content, which is itself flex -- flex:1 + min-height:0
+     make it fill exactly that space instead. */
   background: var(--bg);
   display: flex;
   flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
 }
 
 .audit-topbar {
@@ -2633,6 +2944,7 @@ input[type="checkbox"] {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
 }
 
 .audit-filters {
@@ -2752,6 +3064,7 @@ details[open] > .audit-filter-subgroup-label .audit-filter-subgroup-chevron {
 
 .audit-content {
   flex: 1;
+  min-width: 0;
   overflow-y: auto;
   padding: var(--space-5);
   display: flex;
@@ -2761,7 +3074,7 @@ details[open] > .audit-filter-subgroup-label .audit-filter-subgroup-chevron {
 
 .audit-summary-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: var(--space-3);
 }
 
@@ -2836,7 +3149,7 @@ details[open] > .audit-filter-subgroup-label .audit-filter-subgroup-chevron {
 
 .audit-charts-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-4);
 }
 
@@ -3002,6 +3315,7 @@ details[open] > .audit-filter-subgroup-label .audit-filter-subgroup-chevron {
   flex: 1;
   display: flex;
   min-height: 0;
+  min-width: 0;
 }
 
 .viewer-preview-pane {
@@ -3265,6 +3579,7 @@ kbd {
   font-weight: 600;
   font-size: var(--text-base);
   flex: 1;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -3311,6 +3626,31 @@ kbd {
     flex-direction: column;
   }
 
+  /* The collapsed-rail state is a desktop-only affordance -- on a narrow
+     screen the sidebar is already a compact horizontal row (below), so
+     force it back to that instead of the narrow vertical rail a stale
+     "collapsed" preference from a wider screen would otherwise apply. */
+  .sidebar.collapsed {
+    width: 100%;
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  .sidebar-collapse-btn {
+    display: none;
+  }
+
+  .sidebar.collapsed .sidebar-brand-name,
+  .sidebar.collapsed .sidebar-label,
+  .sidebar.collapsed .sidebar-user {
+    display: inline;
+  }
+
+  .sidebar.collapsed .sidebar-section-label,
+  .sidebar.collapsed .sidebar-connections-empty {
+    display: block;
+  }
+
   .sidebar {
     width: 100%;
     flex-direction: row;
@@ -3346,6 +3686,14 @@ kbd {
     gap: 2px;
   }
 
+  /* The desktop rule's flex-grow is !important (so it wins over the
+     plain .sidebar-nav rule above at any width) -- needs its own
+     !important override here so mobile's wrapped-row layout still gets
+     the natural, non-growing sizing every other nav item gets there. */
+  .sidebar-connections-nav {
+    flex: 0 0 auto !important;
+  }
+
   .sidebar-nav button {
     padding: 6px 8px;
     font-size: var(--text-xs);
@@ -3364,6 +3712,11 @@ kbd {
 
   .sidebar-user {
     display: none;
+  }
+
+  .notif-panel {
+    left: auto;
+    right: 0;
   }
 
   .toolbar {
@@ -3461,141 +3814,130 @@ kbd {
 /* ---------- Integrations page ---------- */
 
 .integrations-page {
-  display: flex;
-  height: 100vh;
-}
-
-.integrations-nav {
-  width: 280px;
-  flex-shrink: 0;
-  background: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  /* Used to be a full-viewport takeover (height:100vh) when this was its
+     own page; now it's embedded as the Connections tab's content inside
+     .settings-tab-content, which is itself flex -- flex:1 + min-height:0
+     make it fill exactly that space instead. A single scrolling column
+     (search bar, then a grid of cards per section) rather than the old
+     fixed-width nav list + side panel. */
   display: flex;
   flex-direction: column;
-  gap: var(--space-4);
-  padding: var(--space-4) 12px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
-.integrations-back {
-  align-self: flex-start;
+.integrations-toolbar {
   display: flex;
   align-items: center;
-  gap: 6px;
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  font-size: var(--text-sm);
-  font-weight: 500;
-  padding: 6px 8px;
-  border-radius: var(--radius-sm);
-}
-
-.integrations-back:hover {
-  background: var(--bg-tertiary);
-  color: var(--text);
-}
-
-.integrations-back-icon {
-  display: inline-flex;
-  transform: rotate(180deg);
-}
-
-.integrations-nav-heading-row {
-  display: flex;
-  align-items: baseline;
   justify-content: space-between;
-  padding: 0 8px;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-5) 0;
+  flex-shrink: 0;
 }
 
-.integrations-title {
-  font-size: var(--text-lg);
-  font-weight: 700;
-  margin: 0;
+.integrations-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  padding: 9px 14px;
+  width: 100%;
+  max-width: 420px;
+  color: var(--text-secondary);
 }
 
-.integrations-nav-section {
+.integrations-search input {
+  border: none;
+  background: none;
+  outline: none;
+  font-size: var(--text-sm);
+  color: var(--text);
+  width: 100%;
+}
+
+.integrations-body {
+  padding: var(--space-5);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--space-6);
+}
+
+.integrations-section-title {
+  font-size: var(--text-base);
+  font-weight: 700;
+  margin: 0 0 var(--space-3);
 }
 
 .integrations-empty-hint {
-  padding: 4px 8px;
+  padding: 4px 0;
 }
 
-.integrations-nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  padding: 8px;
-  border-radius: var(--radius-sm);
+.integrations-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--space-3);
 }
 
-.integrations-nav-item:hover {
-  background: var(--bg-tertiary);
-}
-
-.integrations-nav-item.active {
-  background: var(--accent-tint);
-}
-
-.integrations-nav-item.needs-setup {
-  color: var(--text-secondary);
-}
-
-.integrations-nav-item-label {
-  flex: 1;
-  min-width: 0;
+.integrations-card {
   display: flex;
   flex-direction: column;
-  gap: 1px;
+  align-items: flex-start;
+  gap: 6px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  position: relative;
 }
 
-.integrations-nav-item-name {
+.integrations-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-1);
+}
+
+.integrations-card-name {
   font-size: var(--text-sm);
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-top: 4px;
 }
 
-.integrations-nav-item-sub {
-  font-size: 11px;
+.integrations-card-desc {
+  font-size: 12px;
   color: var(--text-secondary);
+  line-height: 1.4;
 }
 
-.integrations-content {
-  flex: 1;
-  overflow-y: auto;
-  padding: var(--space-6) var(--space-6);
-  display: flex;
-  justify-content: center;
+.integrations-card-badge {
+  position: absolute;
+  top: var(--space-4);
+  right: var(--space-4);
 }
 
-.integrations-placeholder {
-  max-width: 420px;
-  margin-top: 12vh;
-  text-align: center;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
+.integrations-card-disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.integrations-card-disabled:hover {
+  border-color: var(--border);
+  box-shadow: none;
+}
+
+.integrations-card-badge-soon {
   color: var(--text-secondary);
-}
-
-.integrations-placeholder svg {
-  color: var(--text-tertiary);
-  margin-bottom: var(--space-2);
+  background: var(--surface-alt, var(--bg));
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-weight: 600;
 }
 
 .integrations-detail {
   width: 100%;
-  max-width: 480px;
 }
 
 .integrations-detail-header {
@@ -3605,13 +3947,8 @@ kbd {
   margin-bottom: var(--space-5);
 }
 
-.integrations-detail-header h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-}
-
 .integrations-provider-desc {
-  margin: calc(-1 * var(--space-4)) 0 var(--space-4);
+  margin: 0 0 var(--space-4);
   font-size: var(--text-sm);
   line-height: 1.5;
   max-width: 420px;

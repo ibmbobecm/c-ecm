@@ -4,7 +4,7 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel
 
 from .. import activity_service, connections_store, retention_service, retention_store
-from ..auth import CurrentSession, CurrentUser, get_current_session, get_current_user, require_role
+from ..auth import CurrentSession, CurrentUser, get_current_session, get_current_user, require_feature
 from ..schemas import (
     RetentionEnrollRequest,
     RetentionPolicyCreateRequest,
@@ -22,7 +22,7 @@ class _RecordPatch(BaseModel):
 
 router = APIRouter(prefix="/retention", tags=["retention"])
 
-_admin = require_role("admin")
+_admin = require_feature("manage_retention")
 
 
 @router.get("/policies", response_model=list[RetentionPolicyOut])

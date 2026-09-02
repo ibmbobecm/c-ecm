@@ -18,10 +18,10 @@ from ..storage_providers.base import ProviderError
 router = APIRouter(prefix="/files", tags=["ai"])
 
 # Separate, unprefixed router: /ai/status isn't file-scoped, and any
-# authenticated user (not just admins) needs it to know whether to show the
-# Watson/OpenAI/Ollama branding in the AI panel -- it reveals only the
-# active backend NAME, never credentials, so it doesn't need admin's
-# require_role("admin") the way /admin/settings does.
+# authenticated user (not just admins/managers) needs it to know whether to
+# show the Watson/OpenAI/Ollama branding in the AI panel -- it reveals only
+# the active backend NAME, never credentials, so it doesn't need the
+# require_feature("manage_admin_settings") gate the way /admin/settings does.
 status_router = APIRouter(prefix="/ai", tags=["ai"])
 
 

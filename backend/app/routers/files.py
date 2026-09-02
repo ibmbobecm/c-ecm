@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import activity_service, comments_store, esignature_store, locks_store, metadata_store, share_links_store, tags_store, workflows_store
+from .. import access_control, activity_service, ai_agents_store, comments_store, esignature_store, locks_store, metadata_store, resource_permissions_store, share_links_store, tags_store, workflows_store
 from ..access_helpers import to_http
 from ..auth import CurrentSession, get_current_session
 from ..config import MAX_UPLOAD_BYTES
@@ -23,7 +23,19 @@ def _file_name(session: CurrentSession, file_id: str) -> str | None:
         return None
 
 
+def _file_name_and_folder(session: CurrentSession, file_id: str) -> tuple[str | None, str | None]:
+    try:
+        info = session.provider.get_file(session.creds, file_id)
+        return info.name, info.folder_id
+    except Exception:
+        return None, None
+
+
 def _log(session: CurrentSession, event_type: str, result, extra: dict | None = None) -> None:
+    # folder_id always goes in the payload (not just on "moved", where it
+    # was already passed explicitly as new_folder_id) -- it's what lets a
+    # webhook scoped to a folder match events on files directly inside it,
+    # not just the folder resource itself.
     activity_service.record_event(
         connection_id=session.connection_id,
         provider_key=session.provider_key,
@@ -32,7 +44,7 @@ def _log(session: CurrentSession, event_type: str, result, extra: dict | None = 
         resource_name=result.name,
         event_type=event_type,
         actor=_actor(session),
-        payload=extra,
+        payload={"folder_id": result.folder_id, **(extra or {})},
     )
 
 
@@ -43,6 +55,8 @@ async def upload_file(
     name: str | None = Form(default=None),
     session: CurrentSession = Depends(get_current_session),
 ):
+    if folder_id is not None:
+        access_control.require_resource_level(session, folder_id, "folder", "edit")
     data = await upload.read()
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="File exceeds maximum upload size")
@@ -58,6 +72,7 @@ async def upload_file(
 
 @router.get("/{file_id}", response_model=FileOut)
 def get_file(file_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "view")
     try:
         result = session.provider.get_file(session.creds, file_id)
     except ProviderError as exc:
@@ -67,6 +82,9 @@ def get_file(file_id: str, session: CurrentSession = Depends(get_current_session
 
 @router.patch("/{file_id}", response_model=FileOut)
 def update_file(file_id: str, req: FileUpdateRequest, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "edit")
+    if req.folder_id is not None:
+        access_control.require_resource_level(session, req.folder_id, "folder", "edit")
     try:
         result = None
         if req.name is not None:
@@ -87,6 +105,7 @@ def update_file(file_id: str, req: FileUpdateRequest, session: CurrentSession = 
 
 @router.get("/{file_id}/download")
 def download_file(file_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "view")
     try:
         info = session.provider.get_file(session.creds, file_id)
         data = session.provider.get_content(session.creds, file_id)
@@ -110,6 +129,7 @@ def download_file(file_id: str, session: CurrentSession = Depends(get_current_se
 
 @router.get("/{file_id}/versions", response_model=list[FileVersionOut])
 def list_versions(file_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "view")
     try:
         rows = session.provider.list_versions(session.creds, file_id)
     except ProviderError as exc:
@@ -121,6 +141,7 @@ def list_versions(file_id: str, session: CurrentSession = Depends(get_current_se
 async def upload_new_version(
     file_id: str, upload: UploadFile = FastFile(...), session: CurrentSession = Depends(get_current_session)
 ):
+    access_control.require_resource_level(session, file_id, "file", "edit")
     # Enforce check-out: only the lock holder may upload a new version while
     # the document is checked out.  Other users get 423 Locked.
     lock = locks_store.get_lock(session.connection_id, file_id)
@@ -145,6 +166,7 @@ async def upload_new_version(
 
 @router.get("/{file_id}/versions/{version_id}/download")
 def download_version(file_id: str, version_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "view")
     try:
         data = session.provider.get_version_content(session.creds, file_id, version_id)
         info = session.provider.get_file(session.creds, file_id)
@@ -167,6 +189,7 @@ def download_version(file_id: str, version_id: str, session: CurrentSession = De
 
 @router.post("/{file_id}/versions/{version_id}/restore", response_model=FileOut)
 def restore_version(file_id: str, version_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "edit")
     try:
         result = session.provider.restore_version(session.creds, file_id, version_id)
     except ProviderError as exc:
@@ -177,7 +200,8 @@ def restore_version(file_id: str, version_id: str, session: CurrentSession = Dep
 
 @router.delete("/{file_id}", status_code=204)
 def trash_file(file_id: str, session: CurrentSession = Depends(get_current_session)):
-    name = _file_name(session, file_id)
+    access_control.require_resource_level(session, file_id, "file", "edit")
+    name, folder_id = _file_name_and_folder(session, file_id)
     try:
         session.provider.trash_file(session.creds, file_id)
     except ProviderError as exc:
@@ -185,11 +209,13 @@ def trash_file(file_id: str, session: CurrentSession = Depends(get_current_sessi
     activity_service.record_event(
         connection_id=session.connection_id, provider_key=session.provider_key, resource_type="file",
         resource_id=file_id, resource_name=name, event_type="deleted", actor=_actor(session),
+        payload={"folder_id": folder_id},
     )
 
 
 @router.post("/{file_id}/restore", response_model=FileOut)
 def restore_file(file_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "edit")
     try:
         result = session.provider.restore_file(session.creds, file_id)
     except ProviderError as exc:
@@ -200,6 +226,7 @@ def restore_file(file_id: str, session: CurrentSession = Depends(get_current_ses
 
 @router.delete("/{file_id}/permanent", status_code=204)
 def delete_file_permanent(file_id: str, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, file_id, "file", "edit")
     name = _file_name(session, file_id)
     try:
         session.provider.delete_file(session.creds, file_id)
@@ -211,6 +238,8 @@ def delete_file_permanent(file_id: str, session: CurrentSession = Depends(get_cu
     metadata_store.delete_for_resource(session.connection_id, file_id)
     esignature_store.delete_for_resource(session.connection_id, file_id)
     workflows_store.delete_for_resource(session.connection_id, file_id)
+    ai_agents_store.delete_for_resource(session.connection_id, file_id)
+    resource_permissions_store.delete_for_resource(session.connection_id, file_id)
     locks_store.checkin(session.connection_id, file_id)  # release any stale checkout
     activity_service.record_event(
         connection_id=session.connection_id, provider_key=session.provider_key, resource_type="file",

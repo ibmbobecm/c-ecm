@@ -4,8 +4,17 @@ Webhooks give downstream systems real-time awareness of C-ECM events
 without polling.  Every event that passes through activity_service is
 offered to registered webhooks.  Delivery is attempted synchronously
 (in a background thread so it doesn't block the request) with simple
-exponential backoff (3 attempts).  Each delivery is HMAC-SHA256 signed with
-the webhook's secret so the receiver can verify authenticity.
+exponential backoff (3 attempts).
+
+Three destination types:
+  custom  — the original behavior: the raw event JSON, HMAC-SHA256 signed
+            with the webhook's secret so the receiver can verify
+            authenticity.
+  slack   — a Slack incoming-webhook URL; delivered as {"text": ...}, no
+            signature (Slack doesn't check one — the URL itself is the
+            secret).
+  discord — a Discord webhook URL; delivered as {"content": ...}, same
+            reasoning.
 
 The webhook_service subscriber is registered once at startup in main.py's
 lifespan alongside the existing notification_service subscriber.
@@ -79,15 +88,30 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS webhooks (
                 id TEXT PRIMARY KEY,
                 url TEXT NOT NULL,
-                secret TEXT NOT NULL,
+                secret TEXT,
                 event_types_json TEXT NOT NULL DEFAULT '[]',
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 last_triggered_at TEXT,
-                last_status_code INTEGER
+                last_status_code INTEGER,
+                connection_id TEXT,
+                resource_id TEXT,
+                resource_type TEXT,
+                resource_name TEXT,
+                destination_type TEXT NOT NULL DEFAULT 'custom'
             )
             """
         )
+        # Older databases created before scoping/destination-type existed --
+        # SQLite has no "ADD COLUMN IF NOT EXISTS", so check the schema and
+        # add whatever's missing instead of forcing everyone to delete their
+        # data.
+        existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(webhooks)").fetchall()}
+        for col in ("connection_id", "resource_id", "resource_type", "resource_name"):
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE webhooks ADD COLUMN {col} TEXT")
+        if "destination_type" not in existing_cols:
+            conn.execute("ALTER TABLE webhooks ADD COLUMN destination_type TEXT NOT NULL DEFAULT 'custom'")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS webhook_deliveries (
@@ -110,12 +134,17 @@ def _row(row: sqlite3.Row) -> dict:
     return {
         "id": row["id"],
         "url": row["url"],
-        "secret": row["secret"],
+        "secret": row["secret"] or None,
         "event_types": json.loads(row["event_types_json"]),
         "active": bool(row["active"]),
         "created_at": row["created_at"],
         "last_triggered_at": row["last_triggered_at"],
         "last_status_code": row["last_status_code"],
+        "connection_id": row["connection_id"],
+        "resource_id": row["resource_id"],
+        "resource_type": row["resource_type"],
+        "resource_name": row["resource_name"],
+        "destination_type": row["destination_type"],
     }
 
 
@@ -136,15 +165,20 @@ def get_webhook(webhook_id: str) -> dict | None:
         conn.close()
 
 
-def create_webhook(url: str, secret: str, event_types: list[str]) -> dict:
+def create_webhook(url: str, secret: str | None, event_types: list[str], *, connection_id: str | None = None,
+                   resource_id: str | None = None, resource_type: str | None = None,
+                   resource_name: str | None = None, destination_type: str = "custom") -> dict:
     _validate_webhook_url(url)
     wid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     conn = _conn()
     try:
         conn.execute(
-            "INSERT INTO webhooks (id, url, secret, event_types_json, active, created_at) VALUES (?, ?, ?, ?, 1, ?)",
-            (wid, url, secret, json.dumps(event_types), now),
+            "INSERT INTO webhooks (id, url, secret, event_types_json, active, created_at, "
+            "connection_id, resource_id, resource_type, resource_name, destination_type) "
+            "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
+            (wid, url, secret or "", json.dumps(event_types), now, connection_id, resource_id, resource_type,
+             resource_name, destination_type),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM webhooks WHERE id = ?", (wid,)).fetchone()
@@ -154,7 +188,10 @@ def create_webhook(url: str, secret: str, event_types: list[str]) -> dict:
 
 
 def update_webhook(webhook_id: str, *, url: str | None = None, secret: str | None = None,
-                   event_types: list[str] | None = None, active: bool | None = None) -> dict | None:
+                   event_types: list[str] | None = None, active: bool | None = None,
+                   connection_id: str | None = None, resource_id: str | None = None,
+                   resource_type: str | None = None, resource_name: str | None = None,
+                   destination_type: str | None = None, clear_scope: bool = False) -> dict | None:
     if url is not None:
         _validate_webhook_url(url)
     conn = _conn()
@@ -168,6 +205,15 @@ def update_webhook(webhook_id: str, *, url: str | None = None, secret: str | Non
             updates.append(("event_types_json", json.dumps(event_types)))
         if active is not None:
             updates.append(("active", int(active)))
+        if destination_type is not None:
+            updates.append(("destination_type", destination_type))
+        if clear_scope:
+            updates.extend([("connection_id", None), ("resource_id", None), ("resource_type", None), ("resource_name", None)])
+        elif resource_id is not None:
+            updates.extend([
+                ("connection_id", connection_id), ("resource_id", resource_id),
+                ("resource_type", resource_type), ("resource_name", resource_name),
+            ])
         if updates:
             set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
             conn.execute(f"UPDATE webhooks SET {set_clause} WHERE id = ?", (*[v for _, v in updates], webhook_id))
@@ -194,19 +240,40 @@ def _sign(secret: str, payload: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
 
 
+def _format_summary(event: dict, bold: str) -> str:
+    """A one-line, human-readable summary of an event -- used for the chat
+    destinations (Slack/Discord), which show a message, not a JSON blob.
+    `bold` is the platform's own bold-marker (Slack: "*", Discord: "**"),
+    wrapped around the actor and resource name."""
+    actor = event.get("actor") or "Someone"
+    verb = (event.get("event_type") or "updated").replace("_", " ")
+    resource_type = event.get("resource_type") or "resource"
+    resource = event.get("resource_name") or event.get("resource_id") or "a resource"
+    return f'{bold}{actor}{bold} {verb} the {resource_type} {bold}"{resource}"{bold}'
+
+
 def _deliver_one(webhook: dict, event: dict) -> None:
     try:
         _validate_webhook_url(webhook["url"])
     except WebhookUrlError as exc:
         logger.warning("Skipping delivery to webhook %s: %s", webhook["id"], exc)
         return
-    payload = json.dumps(event, default=str).encode()
-    signature = _sign(webhook["secret"], payload)
-    headers = {
-        "Content-Type": "application/json",
-        "X-C-ECM-Signature": signature,
-        "X-C-ECM-Event": event.get("event_type", ""),
-    }
+
+    destination = webhook.get("destination_type") or "custom"
+    if destination == "slack":
+        payload = json.dumps({"text": _format_summary(event, "*")}).encode()
+        headers = {"Content-Type": "application/json"}
+    elif destination == "discord":
+        payload = json.dumps({"content": _format_summary(event, "**")}).encode()
+        headers = {"Content-Type": "application/json"}
+    else:
+        payload = json.dumps(event, default=str).encode()
+        signature = _sign(webhook["secret"], payload)
+        headers = {
+            "Content-Type": "application/json",
+            "X-C-ECM-Signature": signature,
+            "X-C-ECM-Event": event.get("event_type", ""),
+        }
     last_code: int | None = None
     last_error: str | None = None
     for attempt in range(1, 4):
@@ -243,6 +310,27 @@ def _deliver_one(webhook: dict, event: dict) -> None:
         conn.close()
 
 
+def _matches_scope(webhook: dict, event: dict) -> bool:
+    """A webhook with no resource_id is unscoped -- fires for every event
+    (optionally still narrowed to one connection). A scoped webhook fires
+    for events directly on that exact file/folder, or -- since a folder is
+    almost always what someone actually wants to watch, not just the
+    folder object itself -- events on items whose immediate parent is that
+    folder. Deeper nesting (a file two folders down) isn't matched: that
+    would need walking each event's full ancestor chain back through
+    whichever backend (FileNet, an SSH-mounted AS/400, S3, ...) owns it,
+    and webhook delivery runs decoupled from any request's credentials, so
+    there's nothing to call back into to do that walk."""
+    if webhook["connection_id"] and event.get("connection_id") != webhook["connection_id"]:
+        return False
+    if not webhook["resource_id"]:
+        return True
+    if event.get("resource_id") == webhook["resource_id"]:
+        return True
+    payload = event.get("payload") or {}
+    return payload.get("folder_id") == webhook["resource_id"] or payload.get("parent_id") == webhook["resource_id"]
+
+
 def on_event(event: dict) -> None:
     """Activity-service subscriber: dispatches to all matching active webhooks in background threads."""
     event_type = event.get("event_type", "")
@@ -252,8 +340,9 @@ def on_event(event: dict) -> None:
         matching = []
         for row in rows:
             types = json.loads(row["event_types_json"])
-            if not types or event_type in types:
-                matching.append(_row(row))
+            wh = _row(row)
+            if (not types or event_type in types) and _matches_scope(wh, event):
+                matching.append(wh)
     finally:
         conn.close()
 

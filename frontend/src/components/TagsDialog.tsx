@@ -24,7 +24,7 @@ export function TagsDialogContent({
 
   const load = () => {
     apiGet<Tag[]>("/tags").then(setAllTags).catch(() => {});
-    apiGet<Tag[]>(`/resources/${item.id}/tags`).then(setResourceTags).catch(() => {});
+    apiGet<Tag[]>(`/resources/${item.id}/tags?resource_type=${item.type}`).then(setResourceTags).catch(() => {});
   };
 
   useEffect(load, [item.id]);
@@ -50,7 +50,7 @@ export function TagsDialogContent({
     setBusy(true);
     setError(null);
     try {
-      await apiDelete(`/resources/${item.id}/tags/${tagId}`);
+      await apiDelete(`/resources/${item.id}/tags/${tagId}?resource_type=${item.type}`);
       load();
       onChange();
     } catch (err) {

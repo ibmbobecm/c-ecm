@@ -5,7 +5,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from .. import activity_service, connections_store, share_links_store
+from .. import access_control, activity_service, connections_store, share_links_store
 from ..access_helpers import to_http
 from ..auth import CurrentSession, get_current_session
 from ..schemas import ShareLinkCreateRequest, ShareLinkOut
@@ -66,6 +66,7 @@ def _actor(session: CurrentSession) -> str:
 
 @router.post("/resources/{resource_id}/share-links", response_model=ShareLinkOut, status_code=201)
 def create_share_link(resource_id: str, req: ShareLinkCreateRequest, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, req.resource_type, "edit")
     expires_at = None
     if req.expires_in_days:
         expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=req.expires_in_days)
@@ -90,6 +91,7 @@ def create_share_link(resource_id: str, req: ShareLinkCreateRequest, session: Cu
 
 @router.get("/resources/{resource_id}/share-links", response_model=list[ShareLinkOut])
 def list_share_links(resource_id: str, resource_type: str = Query(default="file"), session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, resource_type, "edit")
     try:
         links = session.provider.list_share_links(session.creds, session.connection_id, resource_id, resource_type)
     except ProviderError as exc:
@@ -102,6 +104,7 @@ def list_share_links(resource_id: str, resource_type: str = Query(default="file"
 
 @router.delete("/share-links/{resource_id}/{link_id}", status_code=204)
 def revoke_share_link(resource_id: str, link_id: str, resource_type: str = Query(default="file"), session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, resource_type, "edit")
     try:
         session.provider.revoke_share_link(session.creds, session.connection_id, resource_id, resource_type, link_id)
     except ProviderError as exc:

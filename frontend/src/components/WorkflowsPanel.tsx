@@ -676,8 +676,8 @@ type Tab = "inbox" | "requests" | "designer";
 
 export function WorkflowsPanel() {
   const { activeConnectionId } = useConnections();
-  const { hasRole } = useAuth();
-  const isAdmin = hasRole("admin");
+  const { can } = useAuth();
+  const isAdmin = can("manage_workflow_definitions");
 
   const [tab, setTab] = useState<Tab>("inbox");
   const [instances, setInstances] = useState<WorkflowInstance[]>([]);

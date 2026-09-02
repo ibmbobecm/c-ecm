@@ -3,10 +3,43 @@ export type User = {
   username: string;
   display_name: string;
   email: string | null;
-  roles: string[];
+  is_superadmin: boolean;
   is_active: boolean;
   created_at: string;
   last_login_at: string | null;
+  groups: string[]; // group names this user belongs to, for display
+  features: string[]; // flattened feature set from all their groups
+};
+
+export type Feature = {
+  key: string;
+  label: string;
+  description: string;
+};
+
+export type Group = {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  feature_keys: string[];
+  member_count: number;
+};
+
+export type AccessGrant = {
+  id: string;
+  resource_id: string;
+  resource_type: string;
+  principal_type: "user" | "group";
+  principal_id: string;
+  principal_display: string;
+  level: "view" | "edit";
+  created_at: string;
+  created_by: string | null;
+};
+
+export type EffectiveAccess = {
+  level: "view" | "edit" | "none" | null;
 };
 
 export type ConfigField = {
@@ -24,6 +57,7 @@ export type Provider = {
   config_fields: ConfigField[];
   requires_credentials: boolean;
   credential_labels: [string, string];
+  coming_soon: boolean;
 };
 
 export type AdminSettings = {
@@ -34,6 +68,45 @@ export type AdminSettings = {
   ms_tenant: string;
   box_client_id: string;
   box_client_secret_set: boolean;
+  dropbox_client_id: string;
+  dropbox_client_secret_set: boolean;
+  laserfiche_client_id: string;
+  laserfiche_client_secret_set: boolean;
+  sharefile_client_id: string;
+  sharefile_client_secret_set: boolean;
+  egnyte_client_id: string;
+  egnyte_client_secret_set: boolean;
+  egnyte_domain: string;
+  confluence_client_id: string;
+  confluence_client_secret_set: boolean;
+  huddle_client_id: string;
+  huddle_client_secret_set: boolean;
+  netdocuments_client_id: string;
+  netdocuments_client_secret_set: boolean;
+  zoho_workdrive_client_id: string;
+  zoho_workdrive_client_secret_set: boolean;
+  imanage_client_id: string;
+  imanage_client_secret_set: boolean;
+  imanage_base_url: string;
+  onehub_client_id: string;
+  onehub_client_secret_set: boolean;
+  salesforce_files_client_id: string;
+  salesforce_files_client_secret_set: boolean;
+  oracle_content_management_client_id: string;
+  oracle_content_management_client_secret_set: boolean;
+  oracle_content_management_base_url: string;
+  oracle_content_management_idcs_url: string;
+  kiteworks_client_id: string;
+  kiteworks_client_secret_set: boolean;
+  kiteworks_base_url: string;
+  evernote_teams_client_id: string;
+  evernote_teams_client_secret_set: boolean;
+  saml_enabled: boolean;
+  saml_idp_entity_id: string;
+  saml_idp_sso_url: string;
+  saml_idp_x509_cert_set: boolean;
+  saml_default_group_id: string;
+  saml_sp_entity_id: string;
   docusign_integration_key: string;
   docusign_user_id: string;
   docusign_account_id: string;
@@ -274,6 +347,19 @@ export type ResourceMetadata = {
   class_id: string | null;
   values: Record<string, unknown>;
   updated_at: string;
+  applied_to_count?: number | null;
+};
+
+export type ResourceMetadataHistoryEntry = {
+  id: string;
+  resource_id: string;
+  resource_type: string;
+  old_class_id: string | null;
+  new_class_id: string | null;
+  old_values: Record<string, unknown>;
+  new_values: Record<string, unknown>;
+  changed_by: string | null;
+  changed_at: string;
 };
 
 // --- webhooks --------------------------------------------------------------
@@ -281,12 +367,17 @@ export type ResourceMetadata = {
 export type Webhook = {
   id: string;
   url: string;
-  secret: string;
+  secret: string | null;
+  destination_type: "custom" | "slack" | "discord";
   event_types: string[];
   active: boolean;
   created_at: string;
   last_triggered_at: string | null;
   last_status_code: number | null;
+  connection_id: string | null;
+  resource_id: string | null;
+  resource_type: string | null;
+  resource_name: string | null;
 };
 
 // --- workflows -------------------------------------------------------------
@@ -356,5 +447,40 @@ export type RetentionRecord = {
   status: string;
   legal_hold: boolean;
   actioned_at: string | null;
+  created_at: string;
+};
+
+export type AiAgent = {
+  id: string;
+  name: string;
+  description: string;
+  connection_id: string;
+  provider_key: string;
+  scope_type: "folder" | "file";
+  resource_id: string;
+  resource_name: string;
+  owner: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  chat_url: string;
+  embed_url: string;
+  demo_url: string;
+  demo_download_url: string;
+};
+
+export type AiAgentStats = AiAgent & {
+  chat_count: number;
+  tokens_total: number;
+  last_chat_at: string | null;
+  lead_count: number;
+};
+
+export type AiAgentLead = {
+  id: string;
+  agent_id: string;
+  email: string | null;
+  phone: string | null;
+  message: string;
   created_at: string;
 };

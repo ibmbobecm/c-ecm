@@ -3,10 +3,11 @@ import secrets
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import RedirectResponse
 
-from .. import comments_store, connections_store, esignature_store, locks_store, metadata_store, share_links_store, tags_store, workflows_store
-from ..auth import CurrentUser, get_current_user, require_role
+from .. import ai_agents_store, comments_store, connections_store, esignature_store, locks_store, metadata_store, resource_permissions_store, share_links_store, tags_store, workflows_store
+from ..auth import CurrentUser, get_current_user, require_feature
 from ..schemas import ConfigFieldOut, ConnectionCreateRequest, ConnectionOut, ProviderOut
 from ..storage_providers.base import AuthMode, ProviderError
+from ..storage_providers.coming_soon import COMING_SOON_PROVIDERS
 from ..storage_providers.registry import get_provider, list_providers
 
 router = APIRouter(prefix="/connections", tags=["connections"])
@@ -15,7 +16,7 @@ router = APIRouter(prefix="/connections", tags=["connections"])
 # provider issued the code and what to name the resulting connection.
 _oauth_pending: dict[str, tuple[str, str]] = {}
 
-_admin = require_role("admin")
+_admin = require_feature("manage_connections")
 
 
 def _out(c: dict) -> ConnectionOut:
@@ -24,7 +25,7 @@ def _out(c: dict) -> ConnectionOut:
 
 @router.get("/providers", response_model=list[ProviderOut])
 def providers(_user: CurrentUser = Depends(get_current_user)):
-    return [
+    real = [
         ProviderOut(
             key=p.key, display_name=p.display_name, auth_mode=p.auth_mode.value, configured=p.configured,
             config_fields=[
@@ -36,6 +37,15 @@ def providers(_user: CurrentUser = Depends(get_current_user)):
         )
         for p in list_providers()
     ]
+    coming_soon = [
+        ProviderOut(
+            key=c["key"], display_name=c["display_name"], auth_mode="oauth", configured=False,
+            config_fields=[], requires_credentials=False, credential_labels=("Username", "Password"),
+            coming_soon=True,
+        )
+        for c in COMING_SOON_PROVIDERS
+    ]
+    return real + coming_soon
 
 
 @router.get("", response_model=list[ConnectionOut])
@@ -93,6 +103,8 @@ def delete_connection(connection_id: str, _user: CurrentUser = Depends(_admin)):
     locks_store.delete_for_connection(connection_id)
     esignature_store.delete_for_connection(connection_id)
     workflows_store.delete_for_connection(connection_id)
+    ai_agents_store.delete_for_connection(connection_id)
+    resource_permissions_store.delete_for_connection(connection_id)
 
 
 @router.get("/oauth/{provider_key}/start")

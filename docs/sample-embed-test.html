@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Acme Corp — IT Support Portal (embed test)</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #f6f8fa;
+    color: #24292f;
+  }
+  header {
+    background: #0b1220;
+    color: #fff;
+    padding: 16px 24px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  header .logo {
+    width: 28px; height: 28px; border-radius: 6px;
+    background: #0969da;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 14px;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 700; }
+  .banner {
+    background: #fff3cd;
+    color: #7a5b00;
+    font-size: 12px;
+    text-align: center;
+    padding: 6px;
+  }
+  main {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 32px 24px 60px;
+    display: grid;
+    grid-template-columns: 1fr 440px;
+    gap: 32px;
+  }
+  @media (max-width: 860px) {
+    main { grid-template-columns: 1fr; }
+  }
+  .content h2 { font-size: 22px; margin: 0 0 8px; }
+  .content p { line-height: 1.6; color: #444; }
+  .card {
+    background: #fff;
+    border: 1px solid #d0d7de;
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 6px; font-size: 15px; }
+  .widget-wrap {
+    position: sticky;
+    top: 24px;
+  }
+  .widget-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: #57606a;
+    margin-bottom: 8px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #1a7f37; display: inline-block; }
+</style>
+</head>
+<body>
+  <div class="banner">This is a local test page — it embeds the AI Agent's public iframe URL exactly like an external site would.</div>
+  <header>
+    <div class="logo">A</div>
+    <h1>Acme Corp — IT Support Portal</h1>
+  </header>
+
+  <main>
+    <div class="content">
+      <h2>Welcome to IT Support</h2>
+      <p>Browse common issues below, or use the assistant on the right — it's connected live to our internal knowledge base and can answer questions immediately, sourced from the actual documents.</p>
+
+      <div class="card">
+        <h3>VPN not connecting?</h3>
+        <p>Try restarting the client and confirming your credentials haven't expired. If that doesn't work, ask the assistant — it has the current runbook.</p>
+      </div>
+      <div class="card">
+        <h3>Password reset</h3>
+        <p>Self-service resets are available through the identity portal. For anything else, ask the assistant on the right.</p>
+      </div>
+      <div class="card">
+        <h3>Report an outage</h3>
+        <p>Ask the assistant for the current escalation contact and process — it stays in sync automatically as our documents change.</p>
+      </div>
+    </div>
+
+    <div class="widget-wrap">
+      <div class="widget-label"><span class="dot"></span> Live assistant — embedded via iframe</div>
+      <iframe src="http://192.168.2.41:8020/public/chat/46Oqc5jFn7mL372bFe4K_hrCKGyxMsA0" style="width:100%;max-width:420px;height:560px;border:1px solid #d0d7de;border-radius:12px;" title="Log Assistance"></iframe>
+    </div>
+  </main>
+</body>
+</html>

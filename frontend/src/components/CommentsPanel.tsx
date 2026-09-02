@@ -12,7 +12,7 @@ export function CommentsPanelContent({ item, onChange }: { item: DriveItem; onCh
   const [error, setError] = useState<string | null>(null);
 
   const load = () => {
-    apiGet<Comment[]>(`/resources/${item.id}/comments`)
+    apiGet<Comment[]>(`/resources/${item.id}/comments?resource_type=${item.type}`)
       .then(setComments)
       .catch((err) => setError(err instanceof Error ? err.message : "Couldn't load comments."));
   };

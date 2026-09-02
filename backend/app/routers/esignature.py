@@ -12,9 +12,9 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import activity_service, connections_store, esignature_service, esignature_store
+from .. import access_control, activity_service, connections_store, esignature_service, esignature_store
 from ..access_helpers import to_http
-from ..auth import CurrentSession, CurrentUser, get_current_session, get_current_user, require_role
+from ..auth import CurrentSession, CurrentUser, get_current_session, get_current_user, require_feature
 from ..config import APP_USERNAME
 from ..schemas import ESignatureRequestCreate, ESignatureRequestOut
 from ..storage_providers.base import ProviderError
@@ -25,7 +25,7 @@ logger = logging.getLogger("esignature_router")
 router = APIRouter(tags=["esignature"])
 public_router = APIRouter(tags=["esignature-public"])
 
-_editor = require_role("editor")
+_send_esignature = require_feature("send_esignature")
 
 
 def _actor(session: CurrentSession) -> str:
@@ -33,9 +33,12 @@ def _actor(session: CurrentSession) -> str:
 
 
 @router.post("/files/{file_id}/esignature", response_model=ESignatureRequestOut, status_code=201)
-def send_for_signature(file_id: str, req: ESignatureRequestCreate, session: CurrentSession = Depends(get_current_session)):
-    if "editor" not in session.user.get("roles", []) and "admin" not in session.user.get("roles", []):
-        raise HTTPException(status_code=403, detail="This action requires the 'editor' role")
+def send_for_signature(
+    file_id: str, req: ESignatureRequestCreate,
+    session: CurrentSession = Depends(get_current_session),
+    _feature=Depends(_send_esignature),
+):
+    access_control.require_resource_level(session, file_id, "file", "edit")
     if not esignature_service.is_configured():
         raise HTTPException(status_code=503, detail="DocuSign isn't configured on this server (set it up in Admin Settings)")
     try:
@@ -109,9 +112,9 @@ def void_request(request_id: str, reason: str = Query(default="Voided by C-ECM")
     record = esignature_store.get(request_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Signature request not found")
-    is_admin = "admin" in session.user.get("roles", [])
-    if record["requested_by"] != _actor(session) and not is_admin:
-        raise HTTPException(status_code=403, detail="Only the requester (or an admin) can void this request")
+    is_superadmin = session.user.get("is_superadmin", False)
+    if record["requested_by"] != _actor(session) and not is_superadmin:
+        raise HTTPException(status_code=403, detail="Only the requester (or a superadmin) can void this request")
     if record["status"] in ("completed", "declined", "voided"):
         raise HTTPException(status_code=409, detail=f"This request is already {record['status']}")
     try:

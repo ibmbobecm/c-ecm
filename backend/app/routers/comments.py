@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import activity_service, comments_store
+from .. import access_control, activity_service, comments_store
 from ..auth import CurrentSession, get_current_session
 from ..schemas import BulkCommentCountsRequest, CommentCreateRequest, CommentOut, CommentUpdateRequest
 
 router = APIRouter(tags=["comments"])
+
+# get_bulk_comment_counts (below) deliberately has NO per-resource access
+# check — it fans out over potentially the whole current folder listing,
+# and a comment *count* alone isn't sensitive content; doing a full
+# ancestor-walk per resource there would multiply provider round-trips by
+# list size for a low-value leak. Every single-resource comment route
+# below IS checked, at "view" — annotating something you can see doesn't
+# need full edit rights, same as most real systems' comment permissions.
 
 
 def _actor(session: CurrentSession) -> str:
@@ -26,12 +34,14 @@ def get_bulk_comment_counts(req: BulkCommentCountsRequest, session: CurrentSessi
 
 
 @router.get("/resources/{resource_id}/comments", response_model=list[CommentOut])
-def list_comments(resource_id: str, session: CurrentSession = Depends(get_current_session)):
+def list_comments(resource_id: str, resource_type: str = "file", session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, resource_type, "view")
     return [CommentOut(**c) for c in comments_store.list_for_resource(session.connection_id, resource_id)]
 
 
 @router.post("/resources/{resource_id}/comments", response_model=CommentOut, status_code=201)
 def create_comment(resource_id: str, req: CommentCreateRequest, session: CurrentSession = Depends(get_current_session)):
+    access_control.require_resource_level(session, resource_id, req.resource_type, "view")
     actor = _actor(session)
     comment = comments_store.create(
         connection_id=session.connection_id,
@@ -60,6 +70,7 @@ def update_comment(comment_id: str, req: CommentUpdateRequest, session: CurrentS
     existing = comments_store.get(comment_id)
     if existing is None:
         raise HTTPException(status_code=404, detail="Comment not found")
+    access_control.require_resource_level(session, existing["resource_id"], existing["resource_type"], "view")
     actor = _actor(session)
     if req.body is not None:
         comments_store.edit(comment_id, req.body)
@@ -69,5 +80,8 @@ def update_comment(comment_id: str, req: CommentUpdateRequest, session: CurrentS
 
 
 @router.delete("/comments/{comment_id}", status_code=204)
-def delete_comment(comment_id: str, _session: CurrentSession = Depends(get_current_session)):
+def delete_comment(comment_id: str, session: CurrentSession = Depends(get_current_session)):
+    existing = comments_store.get(comment_id)
+    if existing is not None:
+        access_control.require_resource_level(session, existing["resource_id"], existing["resource_type"], "view")
     comments_store.delete(comment_id)
