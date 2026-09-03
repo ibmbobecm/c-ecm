@@ -1,10 +1,11 @@
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from . import (
     activity_service,
@@ -269,6 +270,15 @@ app.mount("/public/ai-agents", _public_agent_api)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# repo-root/docs — see docs/product-documentation.html itself for what's in it.
+_DOCS_DIR = Path(__file__).parent.parent.parent / "docs"
+
+
+@app.get("/product-docs")
+def product_docs():
+    return FileResponse(_DOCS_DIR / "product-documentation.html")
 
 
 @app.get("/oauth-complete.html", response_class=HTMLResponse)
