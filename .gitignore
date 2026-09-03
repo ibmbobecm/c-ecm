@@ -79,13 +79,12 @@ build/
 *.tmp
 *.temp
 .backup/
-
+*.docx
 # ============================================
 # FileDrive project-specific
 # ============================================
 backend/data/
 backend/local_storage/
 ibm-hackathon-template-main/
-*.docx
 .pytest_cache/
 backend/.pytest_cache/
