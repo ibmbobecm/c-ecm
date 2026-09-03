@@ -1,13 +1,10 @@
 # C-ECM Centralized Enterprise Content Management
 
-> **IBM TechXchange 2026 Pre-conference Dev Day Hackathon** | Theme: *Build with purpose using IBM Bob 2.0*
-> Built end-to-end with an agentic AI coding assistant (IBM Bob 2.0) — Agent mode, parallel subagents, and document understanding, managing the entire application-maintenance and release-governance workflow described below.
-
 [![Python](https://img.shields.io/badge/Python-3.12-blue)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green)](https://fastapi.tiangolo.com)
 [![React](https://img.shields.io/badge/React-19-61DAFB)](https://react.dev)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5-3178C6)](https://typescriptlang.org)
-[![Tests](https://img.shields.io/badge/Tests-217%20passing-brightgreen)]()
+[![Tests](https://img.shields.io/badge/Tests-322%20passing-brightgreen)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -131,35 +128,9 @@ No provider has to know the audit log exists. No new provider needs new audit co
 | **Retention Policies & Legal Hold** | Scheduled retention rules that follow a document across its lifecycle — the record survives even if the file is moved or renamed |
 | **Multi-User RBAC** | Admin / Editor / Viewer roles with JWT auth, bcrypt passwords, and server-side session logout — all audited |
 | **Outbound Webhooks** | HMAC-SHA256 signed, SSRF-hardened event delivery — external systems (ticketing, SIEM) hear about a change the moment it happens |
-| **AI Document Intelligence** | Summarize, classify, and answer natural-language questions about any document via IBM watsonx.ai / Watson NLU / Watson Discovery (OpenAI or local Ollama also supported) |
+| **AI Document Intelligence** | Summarize, classify, and answer natural-language questions about any document — choose Anthropic (Claude), OpenAI/ChatGPT (or any OpenAI-compatible endpoint), local Ollama, IBM watsonx.ai, Watson NLU, or Watson Discovery from **Settings → AI Provider**, no restart needed |
 | **E-Signature** | Route documents through DocuSign for a formal, legally binding sign-off — tracked alongside every other event on that document |
 | **PWA / Mobile-Responsive** | Installable on a phone; usable during an on-call incident away from a desk |
-
----
-
-## Built with IBM Bob 2.0 — Agentic Development, Not Autocomplete
-
-This entire project — from the first storage adapter to the last concurrency bug fix — was carried out through **IBM Bob 2.0 in Agent mode**. Bob was not used as a line-completion assistant. It managed and improved multiple steps of the developer workflow simultaneously.
-
-### Specifically, across the build:
-
-**1. Document understanding applied to the hackathon itself**
-Bob read all three official hackathon PDFs (the Compete page, the theme/judging page, and the Official Rules) directly, extracted the judging criteria, submission requirements, and theme constraints, and used them to re-scope and rewrite this README against the actual criteria. The same document-understanding capability the theme asks the *submission* to demonstrate was used here on the submission process itself.
-
-**2. Parallel subagents for code review**
-A single review pass fanned out 8 parallel subagents across the codebase — each independently reviewing conventions, simplification opportunities, dead code, efficiency, and line-by-line correctness — returning findings that were triaged and fixed as a set, not one linear pass through 40+ files.
-
-**3. Multi-step autonomous debugging**
-Global Search was reported broken. Bob did not stop at the first fix. It traced the issue through three independent layers in one session — a frontend navigation bug, a backend schema/serialization mismatch, and a genuine **race condition** in the storage-provider registry that only manifested under concurrent first access. Bob reproduced the race deterministically in an isolated script, fixed it, then re-ran a 200-trial stress test to prove the fix before touching anything else.
-
-**4. Full-suite verification as a gate, not an afterthought**
-Every change was checked against a live 217-test backend suite and a production frontend build before being reported complete — including live end-to-end verification against the running dev server, not just unit tests in isolation.
-
-**5. Architecture-level judgment**
-When asked for a production-readiness audit, Bob gave an honest, non-inflated assessment of what a single-process/SQLite deployment can and cannot support at scale — the kind of judgment the hackathon's *Completeness and feasibility* criterion is explicitly looking for.
-
-> Full session evidence — **5 official IBM Bob task export JSON files (981 total messages)**, SHA-256 hashes, session narrative, and an attribution boundary — is documented in [`docs/bob-sessions/README.md`](docs/bob-sessions/README.md).
-> The raw task export files are in [`bob-task/`](bob-task/) at the repository root.
 
 ---
 
@@ -170,11 +141,11 @@ When asked for a production-readiness audit, Bob gave an honest, non-inflated as
 | **Frontend** | React 19, TypeScript 5, Vite |
 | **Backend** | FastAPI, Python 3.12, Pydantic v2 |
 | **Authentication** | JWT HS256 + bcrypt, server-side session logout |
-| **Database** | SQLite (WAL mode, per-domain DB files, tuned busy-timeout for concurrent writers) |
+| **Database** | Configurable via `FD_DB_ENGINE`: SQLite (default, WAL mode, one file per domain — zero config) or PostgreSQL/Oracle via SQLAlchemy, for a real multi-user production deployment. Schema/indexes are created automatically on first connect either way — see `backend/app/db.py` |
 | **Scheduler** | APScheduler (background thread — retention policy enforcement) |
-| **AI** | IBM watsonx.ai · Watson NLU · Watson Discovery (OpenAI and local Ollama also supported) |
+| **AI** | Anthropic (Claude) · OpenAI/ChatGPT (or compatible) · local Ollama · IBM watsonx.ai · Watson NLU · Watson Discovery — swap between them from Settings → AI Provider |
 | **E-Signature** | DocuSign (JWT Grant flow) |
-| **Testing** | pytest + httpx — 217 integration tests |
+| **Testing** | pytest + httpx — 322 integration tests |
 
 ---
 
@@ -214,9 +185,30 @@ Password: admin
 
 ---
 
-## IBM watsonx / AI Integration
+## Production Deployment
 
-C-ECM integrates with IBM watsonx.ai, Watson NLU, and Watson Discovery for document intelligence:
+The dev setup above is two bare processes and a SQLite file — fine for evaluating the app, not for a real deployment. `deploy/` has four ready-to-use paths, all built on the same Docker images:
+
+```bash
+cd deploy
+cp .env.production.example .env    # fill in FD_DB_PASSWORD, FD_APP_PASSWORD, FD_OAUTH_REDIRECT_BASE
+docker compose up -d --build       # Postgres + backend + nginx, one command
+```
+
+| Path | What it does |
+|---|---|
+| **Standalone** | `docker compose up -d --build` — runs anywhere Docker does (laptop, bare server, on-prem box) |
+| **AWS** | `deploy/aws/deploy.sh` — provisions an EC2 instance and starts the same stack on it |
+| **Azure** | `deploy/azure/deploy.sh` — provisions an Azure VM and starts the same stack on it |
+| **Windows-native** | `deploy/windows/` — only needed for real FileNet content-**write** support, which needs a local WebSphere Java runtime and can't be containerized; runs the backend natively as a Windows Service alongside containerized Postgres/nginx |
+
+Schema/indexes are created automatically against Postgres (or Oracle) on first connect — no separate migration step. See [`deploy/README.md`](deploy/README.md) for full setup instructions, including what's deliberately left out (TLS termination, automated backups, secrets-manager integration) and how to add each.
+
+---
+
+## AI Provider Integration
+
+C-ECM's document intelligence (summarize, classify, Q&A, AI Agents) can run on any of six backends, switchable from **Settings → AI Provider** with no restart:
 
 | Capability | What it does |
 |---|---|
@@ -225,12 +217,12 @@ C-ECM integrates with IBM watsonx.ai, Watson NLU, and Watson Discovery for docum
 | **Q&A** | Ask natural-language questions about document content |
 | **Workflow suggestion** | Auto-detect the right approval workflow for a document based on its content |
 
-Configure via Admin Settings in the UI, or via `.env`:
+Enter credentials for as many backends as you like from the UI — switching the active one later never loses the others' settings. Or configure via `.env`:
 
 ```bash
-FD_AI_BACKEND=watsonx              # or watson_nlu | watson_disco | openai | ollama | none
-IBM_CLOUD_API_KEY=<your-key>
-WATSONX_PROJECT_ID=<your-project>
+FD_AI_BACKEND=anthropic             # anthropic | openai | ollama | watsonx | watson_nlu | watson_disco | none
+FD_ANTHROPIC_API_KEY=sk-ant-...
+FD_ANTHROPIC_MODEL=claude-sonnet-5
 ```
 
 ---
@@ -240,12 +232,11 @@ WATSONX_PROJECT_ID=<your-project>
 See [SECURITY.MD](SECURITY.MD) for full credential management guidelines.
 
 **Key points:**
-- All credentials in `.env` — never committed (`.gitignore` + `.bobignore` already configured)
+- All credentials in `.env` — never committed (`.gitignore` already configured)
 - JWT signing key auto-generated on first run if not set
 - Every login, logout, and content view recorded in the audit log
 - CORS scoped to loopback + private LAN ranges only
 - Outbound webhooks SSRF-hardened (resolved-IP validation, no redirect-following)
-- `.bobignore` prevents IBM Bob from ever reading or logging credentials while working
 
 ---
 
@@ -258,12 +249,14 @@ filenet-drive/
 │   │   ├── routers/             # FastAPI route handlers (files, auth, workflows, ai, …)
 │   │   ├── storage_providers/   # 11 backend adapters + thread-safe provider registry
 │   │   ├── *_store.py           # Repository modules (one per domain)
+│   │   ├── db.py                # Configurable engine (SQLite/Postgres/Oracle) every store builds on
 │   │   ├── activity_service.py  # Event bus → audit + notifications + webhooks
 │   │   ├── auth.py              # JWT + RBAC
 │   │   ├── main.py              # App entry point
 │   │   └── schemas.py           # Pydantic models
-│   ├── tests/                   # 217 integration tests
+│   ├── tests/                   # 322 integration tests
 │   └── requirements.txt
+├── deploy/                      # Production deployment — standalone/AWS/Azure/Windows-native (see deploy/README.md)
 ├── frontend/
 │   ├── src/
 │   │   ├── components/          # React components (Viewer, Workflows, Audit, AI, …)
@@ -272,18 +265,8 @@ filenet-drive/
 │   │   ├── icons/               # Inline SVG icon system
 │   │   └── types.ts             # TypeScript type definitions
 │   └── package.json
-├── bob-task/                    # Official IBM Bob task export JSON files (5 sessions, 981 messages)
-│   ├── bob-task-018fc7683ce67500f63ad69ae586d042-2026-08-30.json  (CECM-01, 95 msgs)
-│   ├── bob-task-d43365e0d43c8cd048cf49c5453527a3-2026-08-30.json  (CECM-02, 533 msgs)
-│   ├── bob-task-69110673e0fd0dfce655ae2b111e830b-2026-08-30.json  (CECM-03, 152 msgs)
-│   ├── bob-task-e365ac58a76e97da16af2325ea61fea2-2026-08-30.json  (CECM-04, 124 msgs)
-│   └── bob-task-6e8ecfca658e8beba0ff359383390305-2026-08-30.json  (CECM-05, 77 msgs)
-├── docs/
-│   └── bob-sessions/            # IBM Bob session evidence index with SHA-256 hashes
-├── h-doc/                       # Hackathon official PDFs (read by IBM Bob for criteria alignment)
 ├── .env.example                 # Environment variable template
 ├── .gitignore                   # Prevents credential commits
-├── .bobignore                   # Prevents Bob from reading credentials
 └── SECURITY.MD                  # Security guidelines
 ```
 
@@ -294,7 +277,7 @@ filenet-drive/
 ```bash
 cd backend
 .venv\Scripts\python.exe -m pytest tests/ -q
-# Expected: 217 passed
+# Expected: 322 passed
 # (2 pre-existing failures possible only in sandboxes with no outbound DNS — unrelated to app logic)
 ```
 
@@ -311,8 +294,3 @@ cd backend
 ## License
 
 MIT License — see LICENSE file for details.
-
----
-
-*Built with IBM Bob 2.0 for the IBM TechXchange 2026 Pre-conference Dev Day Hackathon.*
-*Hashtag: [#watsonxHackathon](https://twitter.com/hashtag/watsonxHackathon)*

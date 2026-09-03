@@ -39,6 +39,7 @@ class UserOut(BaseModel):
     created_at: str
     last_login_at: str | None = None
     groups: list[str] = []  # group names this user belongs to, for display
+    group_ids: list[str] = []  # same groups, by id -- for client-side group-assignee matching
     features: list[str] = []  # flattened feature set from all their groups
 
 
@@ -196,6 +197,15 @@ class AdminSettingsOut(BaseModel):
     docusign_webhook_hmac_key_set: bool
     docusign_configured: bool
     ai_backend: str
+    anthropic_api_key_set: bool
+    anthropic_model: str
+    anthropic_configured: bool
+    ai_api_key_set: bool
+    ai_base_url: str
+    ai_model: str
+    ai_openai_configured: bool
+    ollama_url: str
+    ollama_model: str
     ibm_cloud_api_key_set: bool
     watsonx_project_id: str
     watsonx_url: str
@@ -263,6 +273,13 @@ class AdminSettingsUpdate(BaseModel):
     docusign_environment: str | None = None
     docusign_webhook_hmac_key: str | None = None
     ai_backend: str | None = None
+    anthropic_api_key: str | None = None
+    anthropic_model: str | None = None
+    ai_api_key: str | None = None
+    ai_base_url: str | None = None
+    ai_model: str | None = None
+    ollama_url: str | None = None
+    ollama_model: str | None = None
     ibm_cloud_api_key: str | None = None
     watsonx_project_id: str | None = None
     watsonx_url: str | None = None
@@ -585,11 +602,20 @@ class LockOut(BaseModel):
 # --- document classes / metadata -------------------------------------------
 
 class MetadataFieldDef(BaseModel):
-    key: str
-    label: str
-    type: str = "text"   # text | number | date | boolean | select
+    key: str = Field(min_length=1, max_length=100)
+    label: str = Field(min_length=1, max_length=200)
+    type: Literal["text", "number", "date", "boolean", "select"] = "text"
     required: bool = False
     options: list[str] = []   # for select type
+
+
+def _check_unique_field_keys(fields: list[MetadataFieldDef]) -> list[MetadataFieldDef]:
+    seen = set()
+    for f in fields:
+        if f.key in seen:
+            raise ValueError(f'Duplicate field key "{f.key}" — every field in a class needs a unique key')
+        seen.add(f.key)
+    return fields
 
 
 class DocumentClassCreateRequest(BaseModel):
@@ -597,11 +623,21 @@ class DocumentClassCreateRequest(BaseModel):
     description: str | None = None
     fields: list[MetadataFieldDef] = []
 
+    @field_validator("fields")
+    @classmethod
+    def _validate_fields(cls, fields: list[MetadataFieldDef]) -> list[MetadataFieldDef]:
+        return _check_unique_field_keys(fields)
+
 
 class DocumentClassUpdateRequest(BaseModel):
     name: str | None = None
     description: str | None = None
     fields: list[MetadataFieldDef] | None = None
+
+    @field_validator("fields")
+    @classmethod
+    def _validate_fields(cls, fields: list[MetadataFieldDef] | None) -> list[MetadataFieldDef] | None:
+        return fields if fields is None else _check_unique_field_keys(fields)
 
 
 class DocumentClassOut(BaseModel):
@@ -696,7 +732,7 @@ class WebhookUpdateRequest(BaseModel):
 class WebhookOut(BaseModel):
     id: str
     url: str
-    secret: str | None = None
+    secret_set: bool = False   # never the raw value — same *_set convention as admin settings' secrets
     destination_type: str = "custom"
     event_types: list[str] = []
     active: bool
@@ -711,9 +747,14 @@ class WebhookOut(BaseModel):
 
 # --- workflows -------------------------------------------------------------
 
+class AssigneeRef(BaseModel):
+    type: str = Field(pattern=r"^(user|group)$")
+    id: str   # username for type="user", group id for type="group"
+
+
 class WorkflowStepDef(BaseModel):
     name: str
-    reviewers: list[str] = []   # usernames; empty = any authenticated user
+    assignees: list[AssigneeRef] = []   # empty = any authenticated user
     required_approvals: int = 1
 
 
@@ -732,10 +773,24 @@ class WorkflowDefinitionOut(BaseModel):
     created_at: str
 
 
-class WorkflowInstanceCreateRequest(BaseModel):
-    definition_id: str
+class WorkflowResourceRef(BaseModel):
     resource_id: str
     resource_type: str = Field(default="file", pattern=r"^(file|folder)$")
+
+
+class WorkflowInstanceCreateRequest(BaseModel):
+    definition_id: str
+    resources: list[WorkflowResourceRef] = Field(min_length=1)
+    comment: str | None = None
+
+
+class WorkflowAddResourceRequest(BaseModel):
+    resource_id: str
+    resource_type: str = Field(default="file", pattern=r"^(file|folder)$")
+
+
+class WorkflowReassignRequest(BaseModel):
+    assignees: list[AssigneeRef] = Field(min_length=1)
     comment: str | None = None
 
 
@@ -753,15 +808,23 @@ class WorkflowStepActionOut(BaseModel):
     acted_at: str
 
 
+class WorkflowInstanceResourceOut(BaseModel):
+    id: str
+    resource_id: str
+    resource_type: str
+    resource_name: str | None = None
+    added_at: str
+    added_by: str
+
+
 class WorkflowInstanceOut(BaseModel):
     id: str
     definition_id: str
     connection_id: str
-    resource_id: str
-    resource_type: str
-    resource_name: str | None = None
+    resources: list[WorkflowInstanceResourceOut] = []
     status: str
     current_step: int
+    steps: list[WorkflowStepDef] = []
     requested_by: str
     comment: str | None = None
     created_at: str

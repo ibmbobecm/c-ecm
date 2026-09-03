@@ -7,15 +7,187 @@
  */
 import { useEffect, useState } from "react";
 import { apiDelete, apiGet, apiPost } from "../api/client";
-import type { User, WorkflowInstance, WorkflowDefinition, WorkflowStepDef } from "../types";
+import type { AssigneeRef, Group, User, WorkflowInstance, WorkflowDefinition, WorkflowStepDef } from "../types";
 import { useAuth } from "../contexts/AuthContext";
 import { useConnections } from "../contexts/ConnectionsContext";
 import { Icon } from "../icons";
 import { formatDate } from "../utils";
+import { ResourcePickerDialog, type PickedResource } from "./ResourcePickerDialog";
 
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+
+/** Display name for a user- or group-type assignee. Falls back to the raw
+ * id if the user/group can't be found (e.g. a group that's since been
+ * deleted — see workflows_store.delete_for_group, which clears the
+ * reference from the shared definition but a completed instance's own
+ * steps_json snapshot keeps the id as a historical record). */
+export function assigneeLabel(a: AssigneeRef, users: User[], groups: Group[]): string {
+  if (a.type === "group") {
+    // groups may be empty for a non-admin viewer (GET /groups requires
+    // 'manage_groups') rather than the group actually being gone -- "a
+    // group" is honest in both cases, where "(deleted group)" would not be.
+    return groups.find((g) => g.id === a.id)?.name ?? "a group";
+  }
+  const u = users.find((x) => x.username === a.id);
+  return u ? u.display_name || u.username : a.id;
+}
+
+/** Is `user` eligible to act on (or be considered "involved in") a step
+ * with these assignees — directly named, or a member of a named group.
+ * Mirrors the backend's access_control-style matching in
+ * routers/workflows.py's act_on_step/_is_involved. */
+export function isAssigned(user: User | null | undefined, assignees: AssigneeRef[]): boolean {
+  if (!user) return false;
+  return assignees.some(
+    (a) => (a.type === "user" && a.id === user.username) || (a.type === "group" && user.group_ids.includes(a.id))
+  );
+}
+
+/** The document(s) a workflow instance covers — one name inline (today's
+ * look) or an expandable "N documents" list for a multi-document request. */
+export function ResourceList({ instance }: { instance: WorkflowInstance }) {
+  const [open, setOpen] = useState(false);
+  const resources = instance.resources;
+  if (resources.length === 0) return null;
+  if (resources.length === 1) {
+    return <span style={{ fontWeight: 600, fontSize: "var(--text-base)" }}>{resources[0].resource_name ?? resources[0].resource_id}</span>;
+  }
+  return (
+    <span>
+      <button
+        type="button"
+        className="link-btn"
+        style={{ fontWeight: 600, fontSize: "var(--text-base)" }}
+        onClick={() => setOpen((o) => !o)}
+      >
+        {resources.length} documents {open ? "▾" : "▸"}
+      </button>
+      {open && (
+        <ul style={{ margin: "4px 0 0", paddingLeft: 18, fontSize: "var(--text-sm)", fontWeight: 400 }}>
+          {resources.map((r) => (
+            <li key={r.id}>{r.resource_name ?? r.resource_id}</li>
+          ))}
+        </ul>
+      )}
+    </span>
+  );
+}
+
+/** Client-side mirror of the backend's _is_involved (routers/workflows.py)
+ * — who sees the Reassign / Add document controls. The real gate is
+ * server-side; this just avoids showing a control that would predictably
+ * 403. Deliberately NOT "any authenticated user" even on an open step. */
+export function canManageInstance(user: User | null | undefined, isWorkflowAdmin: boolean, inst: WorkflowInstance): boolean {
+  if (!user) return false;
+  if (isWorkflowAdmin) return true;
+  if (inst.requested_by === user.username) return true;
+  if (inst.status !== "in_review") return false;
+  const step = inst.steps[inst.current_step];
+  if (!step || step.assignees.length === 0) return false;
+  return isAssigned(user, step.assignees);
+}
+
+export function ReassignControl({
+  instance,
+  users,
+  groups,
+  onDone,
+}: {
+  instance: WorkflowInstance;
+  users: User[];
+  groups: Group[];
+  onDone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [principalType, setPrincipalType] = useState<"user" | "group">("user");
+  const [principalId, setPrincipalId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!principalId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPost(`/workflows/instances/${instance.id}/reassign`, {
+        assignees: [{ type: principalType, id: principalId }],
+      });
+      setOpen(false);
+      setPrincipalId("");
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't reassign this step.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!open) {
+    return (
+      <button type="button" className="link-btn" style={{ fontSize: 12 }} onClick={() => setOpen(true)}>
+        Reassign
+      </button>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginTop: 6 }}>
+      <select
+        value={principalType}
+        onChange={(e) => { setPrincipalType(e.target.value as "user" | "group"); setPrincipalId(""); }}
+        style={{ fontSize: 12, padding: "3px 4px" }}
+      >
+        <option value="user">User</option>
+        <option value="group">Group</option>
+      </select>
+      <select value={principalId} onChange={(e) => setPrincipalId(e.target.value)} style={{ fontSize: 12, padding: "3px 4px" }}>
+        <option value="">Choose…</option>
+        {principalType === "user"
+          ? users.map((u) => <option key={u.id} value={u.username}>{u.display_name || u.username}</option>)
+          : groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+      </select>
+      <button type="button" className="btn-secondary" style={{ fontSize: 12 }} disabled={!principalId || busy} onClick={submit}>
+        {busy ? "Reassigning…" : "Confirm"}
+      </button>
+      <button type="button" className="link-btn" style={{ fontSize: 12 }} onClick={() => setOpen(false)}>Cancel</button>
+      {error && <span style={{ color: "var(--danger)", fontSize: 12 }}>{error}</span>}
+    </div>
+  );
+}
+
+export function AddDocumentControl({ instance, onDone }: { instance: WorkflowInstance; onDone: () => void }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const add = async (picked: PickedResource) => {
+    setBusy(true);
+    setError(null);
+    try {
+      await apiPost(`/workflows/instances/${instance.id}/resources`, {
+        resource_id: picked.resourceId,
+        resource_type: picked.resourceType,
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't add that document.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <button type="button" className="link-btn" style={{ fontSize: 12 }} disabled={busy} onClick={() => setPickerOpen(true)}>
+        + Add document
+      </button>
+      {error && <span style={{ color: "var(--danger)", fontSize: 12, marginLeft: 6 }}>{error}</span>}
+      {pickerOpen && <ResourcePickerDialog onClose={() => setPickerOpen(false)} onSelect={add} />}
+    </>
+  );
+}
 
 export function StatusBadge({ status }: { status: WorkflowInstance["status"] }) {
   const map: Record<string, { label: string; style: React.CSSProperties }> = {
@@ -50,10 +222,10 @@ function Card({ children }: { children: React.ReactNode }) {
  * what comment, when. The backend has always returned this (step_actions),
  * but nothing rendered it: an instance's whole history was invisible once
  * you weren't the one currently holding the ball. */
-export function StepTimeline({ instance, definition }: { instance: WorkflowInstance; definition?: WorkflowDefinition }) {
+export function StepTimeline({ instance }: { instance: WorkflowInstance }) {
   const [open, setOpen] = useState(false);
   if (instance.step_actions.length === 0) return null;
-  const stepName = (idx: number) => definition?.steps[idx]?.name ?? `Step ${idx + 1}`;
+  const stepName = (idx: number) => instance.steps[idx]?.name ?? `Step ${idx + 1}`;
   return (
     <div style={{ marginTop: "var(--space-2)" }}>
       <button
@@ -88,11 +260,17 @@ export function StepTimeline({ instance, definition }: { instance: WorkflowInsta
 function InboxTab({
   instances,
   definitions,
+  users,
+  groups,
+  isWorkflowAdmin,
   loading,
   onRefresh,
 }: {
   instances: WorkflowInstance[];
   definitions: WorkflowDefinition[];
+  users: User[];
+  groups: Group[];
+  isWorkflowAdmin: boolean;
   loading: boolean;
   onRefresh: () => void;
 }) {
@@ -103,23 +281,20 @@ function InboxTab({
 
   const defName = (id: string) => definitions.find((d) => d.id === id)?.name ?? id;
 
-  // Instances where the current user is a listed reviewer and hasn't acted yet
+  // Instances where the current user is an assigned reviewer (directly or
+  // via a group) and hasn't acted yet. Steps come from each instance's OWN
+  // snapshot (inst.steps), not the shared definition — a reassigned step
+  // only exists there.
   const pending = instances.filter((i) => {
     if (i.status !== "in_review") return false;
-    const step = i.step_actions;
-    const def = definitions.find((d) => d.id === i.definition_id);
-    if (!def) return false;
-    const stepDef = def.steps[i.current_step];
+    const stepDef = i.steps[i.current_step];
     if (!stepDef) return false;
-    const alreadyActed = step.some(
+    const alreadyActed = i.step_actions.some(
       (a) => a.reviewer === user?.username && a.step_index === i.current_step,
     );
-    // An empty reviewers list means the backend allows ANY authenticated
-    // user to act on this step (see act_on_step's `if reviewers and
-    // reviewer not in reviewers`) — [].includes(...) is always false, so
-    // without this check that kind of step would never show up in
-    // anyone's inbox even though the API accepts an action on it.
-    const isReviewer = stepDef.reviewers.length === 0 || stepDef.reviewers.includes(user?.username ?? "");
+    // Empty assignees means the backend allows ANY authenticated user to
+    // act on this step (see act_on_step's `if assignees and not any(...)`).
+    const isReviewer = stepDef.assignees.length === 0 || isAssigned(user, stepDef.assignees);
     return isReviewer && !alreadyActed;
   });
 
@@ -162,25 +337,22 @@ function InboxTab({
       )}
 
       {pending.map((inst) => {
-        const def = definitions.find((d) => d.id === inst.definition_id);
-        const stepDef = def?.steps[inst.current_step];
+        const stepDef = inst.steps[inst.current_step];
         return (
           <Card key={inst.id}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-              <span style={{ fontWeight: 600, fontSize: "var(--text-base)" }}>
-                {inst.resource_name ?? inst.resource_id}
-              </span>
+              <ResourceList instance={inst} />
               <StatusBadge status={inst.status} />
             </div>
             <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: 4 }}>
               Workflow: <strong>{defName(inst.definition_id)}</strong>
-              {def && stepDef && <> · Step {inst.current_step + 1} of {def.steps.length}: <strong>{stepDef.name}</strong></>}
+              {stepDef && <> · Step {inst.current_step + 1} of {inst.steps.length}: <strong>{stepDef.name}</strong></>}
               {" · "}Requested by <strong>{inst.requested_by}</strong>
               {" · "}{formatDate(inst.created_at)}
             </div>
-            {stepDef && stepDef.reviewers.length > 1 && (
+            {stepDef && stepDef.assignees.length > 1 && (
               <div style={{ fontSize: 12, color: "var(--text-tertiary)", marginBottom: 4 }}>
-                Needs {stepDef.required_approvals} of {stepDef.reviewers.length} reviewers: {stepDef.reviewers.join(", ")}
+                Needs {stepDef.required_approvals} of {stepDef.assignees.length}: {stepDef.assignees.map((a) => assigneeLabel(a, users, groups)).join(", ")}
               </div>
             )}
             {inst.comment && (
@@ -188,7 +360,13 @@ function InboxTab({
                 "{inst.comment}"
               </p>
             )}
-            <StepTimeline instance={inst} definition={def} />
+            <StepTimeline instance={inst} />
+            {canManageInstance(user, isWorkflowAdmin, inst) && (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+                <ReassignControl instance={inst} users={users} groups={groups} onDone={onRefresh} />
+                <AddDocumentControl instance={inst} onDone={onRefresh} />
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", marginTop: "var(--space-3)" }}>
               <input
                 placeholder="Comment (optional)"
@@ -235,11 +413,17 @@ function InboxTab({
 function MyRequestsTab({
   instances,
   definitions,
+  users,
+  groups,
+  isWorkflowAdmin,
   loading,
   onRefresh,
 }: {
   instances: WorkflowInstance[];
   definitions: WorkflowDefinition[];
+  users: User[];
+  groups: Group[];
+  isWorkflowAdmin: boolean;
   loading: boolean;
   onRefresh: () => void;
 }) {
@@ -275,21 +459,18 @@ function MyRequestsTab({
       )}
 
       {mine.map((inst) => {
-        const def = definitions.find((d) => d.id === inst.definition_id);
-        const stepDef = def?.steps[inst.current_step];
+        const stepDef = inst.steps[inst.current_step];
         return (
         <Card key={inst.id}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 6 }}>
-            <span style={{ fontWeight: 600, fontSize: "var(--text-base)" }}>
-              {inst.resource_name ?? inst.resource_id}
-            </span>
+            <ResourceList instance={inst} />
             <StatusBadge status={inst.status} />
           </div>
           <div style={{ fontSize: "var(--text-sm)", color: "var(--text-secondary)", marginBottom: 4 }}>
             Workflow: <strong>{defName(inst.definition_id)}</strong>
-            {inst.status === "in_review" && def && stepDef && (
-              <> · Awaiting step {inst.current_step + 1} of {def.steps.length}: <strong>{stepDef.name}</strong>
-              {stepDef.reviewers.length > 0 ? ` (${stepDef.reviewers.join(", ")})` : " (any reviewer)"}</>
+            {inst.status === "in_review" && stepDef && (
+              <> · Awaiting step {inst.current_step + 1} of {inst.steps.length}: <strong>{stepDef.name}</strong>
+              {stepDef.assignees.length > 0 ? ` (${stepDef.assignees.map((a) => assigneeLabel(a, users, groups)).join(", ")})` : " (any reviewer)"}</>
             )}
             {" · "}{formatDate(inst.created_at)}
             {inst.completed_at && <> · Completed {formatDate(inst.completed_at)}</>}
@@ -299,7 +480,13 @@ function MyRequestsTab({
               "{inst.comment}"
             </p>
           )}
-          <StepTimeline instance={inst} definition={def} />
+          <StepTimeline instance={inst} />
+          {canManageInstance(user, isWorkflowAdmin, inst) && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+              <ReassignControl instance={inst} users={users} groups={groups} onDone={onRefresh} />
+              <AddDocumentControl instance={inst} onDone={onRefresh} />
+            </div>
+          )}
           {inst.status === "in_review" && (
             <button
               className="btn-secondary"
@@ -323,10 +510,14 @@ function MyRequestsTab({
 
 function DesignerTab({
   definitions,
+  users,
+  groups,
   loading,
   onRefresh,
 }: {
   definitions: WorkflowDefinition[];
+  users: User[];
+  groups: Group[];
   loading: boolean;
   onRefresh: () => void;
 }) {
@@ -338,16 +529,12 @@ function DesignerTab({
   const [formError, setFormError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [users, setUsers] = useState<User[]>([]);
 
-  // Reviewers used to be a freeform comma-separated username field — a
+  // Assignees used to be a freeform comma-separated username field — a
   // single typo silently created a step nobody could ever act on (an
   // unrecognized username just never matches the current reviewer, so
   // that step — and the whole instance — would sit in_review forever).
-  // Picking from real accounts makes that class of mistake impossible.
-  useEffect(() => {
-    apiGet<User[]>("/users").then(setUsers).catch(() => {});
-  }, []);
+  // Picking from real accounts/groups makes that class of mistake impossible.
   const activeUsers = users.filter((u) => u.is_active);
 
   const resetForm = () => {
@@ -358,7 +545,7 @@ function DesignerTab({
   };
 
   const addStep = () =>
-    setSteps((s) => [...s, { name: "", reviewers: [], required_approvals: 1 }]);
+    setSteps((s) => [...s, { name: "", assignees: [], required_approvals: 1 }]);
 
   const updateStep = (i: number, patch: Partial<WorkflowStepDef>) =>
     setSteps((s) => s.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
@@ -366,17 +553,29 @@ function DesignerTab({
   const removeStep = (i: number) =>
     setSteps((s) => s.filter((_, idx) => idx !== i));
 
+  const toggleAssignee = (i: number, type: "user" | "group", id: string, checked: boolean) => {
+    setSteps((s) =>
+      s.map((x, idx) => {
+        if (idx !== i) return x;
+        const assignees = checked
+          ? [...x.assignees, { type, id }]
+          : x.assignees.filter((a) => !(a.type === type && a.id === id));
+        return { ...x, assignees };
+      })
+    );
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (steps.length === 0) { setFormError("Add at least one step."); return; }
     for (const s of steps) {
       if (!s.name.trim()) { setFormError("All steps need a name."); return; }
     }
-    // No reviewers is a legitimate, supported configuration (any
+    // No assignees is a legitimate, supported configuration (any
     // authenticated user may act) — but it's also exactly what an
     // accidentally-cleared checklist looks like, so confirm rather than
     // silently accepting it or hard-blocking a deliberate open step.
-    const openSteps = steps.filter((s) => s.reviewers.length === 0);
+    const openSteps = steps.filter((s) => s.assignees.length === 0);
     if (openSteps.length > 0) {
       const names = openSteps.map((s) => `"${s.name}"`).join(", ");
       if (!window.confirm(`${names} ${openSteps.length === 1 ? "has" : "have"} no specific reviewers — any authenticated user will be able to act on it. Continue?`)) {
@@ -521,7 +720,6 @@ function DesignerTab({
                     <input
                       type="number"
                       min={1}
-                      max={step.reviewers.length || 1}
                       value={step.required_approvals}
                       onChange={(e) => updateStep(i, { required_approvals: Math.max(1, Number(e.target.value)) })}
                       style={{ width: 90, padding: "6px 8px", borderRadius: "var(--radius-sm)", border: "1px solid var(--border)", background: "var(--bg)", color: "var(--text)", fontSize: "var(--text-sm)", boxSizing: "border-box" }}
@@ -529,9 +727,9 @@ function DesignerTab({
                   </label>
                 </div>
 
-                <div>
+                <div style={{ marginBottom: 10 }}>
                   <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>
-                    Reviewers
+                    Users
                   </span>
                   {activeUsers.length === 0 ? (
                     <p style={{ fontSize: 12, color: "var(--text-tertiary)", margin: 0 }}>No active users to choose from.</p>
@@ -542,21 +740,38 @@ function DesignerTab({
                           <input
                             type="checkbox"
                             style={{ width: "auto" }}
-                            checked={step.reviewers.includes(u.username)}
-                            onChange={(e) =>
-                              updateStep(i, {
-                                reviewers: e.target.checked
-                                  ? [...step.reviewers, u.username]
-                                  : step.reviewers.filter((r) => r !== u.username),
-                              })
-                            }
+                            checked={step.assignees.some((a) => a.type === "user" && a.id === u.username)}
+                            onChange={(e) => toggleAssignee(i, "user", u.username, e.target.checked)}
                           />
                           {u.display_name || u.username}
                         </label>
                       ))}
                     </div>
                   )}
-                  {step.reviewers.length === 0 && (
+                </div>
+
+                <div>
+                  <span style={{ fontSize: 11, fontWeight: 500, color: "var(--text-secondary)", display: "block", marginBottom: 4 }}>
+                    Groups
+                  </span>
+                  {groups.length === 0 ? (
+                    <p style={{ fontSize: 12, color: "var(--text-tertiary)", margin: 0 }}>No groups to choose from.</p>
+                  ) : (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "4px 14px" }}>
+                      {groups.map((g) => (
+                        <label key={g.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: "var(--text-sm)" }}>
+                          <input
+                            type="checkbox"
+                            style={{ width: "auto" }}
+                            checked={step.assignees.some((a) => a.type === "group" && a.id === g.id)}
+                            onChange={(e) => toggleAssignee(i, "group", g.id, e.target.checked)}
+                          />
+                          {g.name}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                  {step.assignees.length === 0 && (
                     <p style={{ fontSize: 12, color: "var(--warning)", margin: "6px 0 0" }}>
                       No one selected — any authenticated user will be able to act on this step.
                     </p>
@@ -651,7 +866,9 @@ function DesignerTab({
                   }}>{i + 1}</span>
                   <span style={{ fontWeight: 500 }}>{step.name}</span>
                   <span style={{ color: "var(--text-secondary)" }}>
-                    · {step.reviewers.join(", ")}
+                    · {step.assignees.length > 0
+                      ? step.assignees.map((a) => assigneeLabel(a, users, groups)).join(", ")
+                      : "any reviewer"}
                     · needs {step.required_approvals} approval{step.required_approvals !== 1 ? "s" : ""}
                   </span>
                 </div>
@@ -682,6 +899,8 @@ export function WorkflowsPanel() {
   const [tab, setTab] = useState<Tab>("inbox");
   const [instances, setInstances] = useState<WorkflowInstance[]>([]);
   const [definitions, setDefinitions] = useState<WorkflowDefinition[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = () => {
@@ -701,6 +920,15 @@ export function WorkflowsPanel() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, [activeConnectionId]);
+
+  // Best-effort — GET /users and /groups both require an admin-ish
+  // feature (manage_users / manage_groups). An ordinary reviewer without
+  // either just gets an empty list here and assigneeLabel() falls back to
+  // showing the raw username/id, which is still correct, just less pretty.
+  useEffect(() => {
+    apiGet<User[]>("/users").then(setUsers).catch(() => {});
+    apiGet<Group[]>("/groups").then(setGroups).catch(() => {});
+  }, []);
 
   const tabStyle = (t: Tab): React.CSSProperties => ({
     padding: "8px 16px",
@@ -757,13 +985,19 @@ export function WorkflowsPanel() {
 
       {/* Tab content */}
       {tab === "inbox" && (
-        <InboxTab instances={instances} definitions={definitions} loading={loading} onRefresh={load} />
+        <InboxTab
+          instances={instances} definitions={definitions} users={users} groups={groups}
+          isWorkflowAdmin={isAdmin} loading={loading} onRefresh={load}
+        />
       )}
       {tab === "requests" && (
-        <MyRequestsTab instances={instances} definitions={definitions} loading={loading} onRefresh={load} />
+        <MyRequestsTab
+          instances={instances} definitions={definitions} users={users} groups={groups}
+          isWorkflowAdmin={isAdmin} loading={loading} onRefresh={load}
+        />
       )}
       {tab === "designer" && isAdmin && (
-        <DesignerTab definitions={definitions} loading={loading} onRefresh={load} />
+        <DesignerTab definitions={definitions} users={users} groups={groups} loading={loading} onRefresh={load} />
       )}
     </div>
   );

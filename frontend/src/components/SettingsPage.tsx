@@ -10,8 +10,9 @@ import { ClassListView } from "./DocumentClassesPanel";
 import { WebhookManagementPanel } from "./WebhookManagementPanel";
 import { RetentionPolicyPanel } from "./RetentionPolicyPanel";
 import { SamlSettingsPanel } from "./SamlSettingsPanel";
+import { AiSettingsPanel } from "./AiSettingsPanel";
 
-export type SettingsTab = "connections" | "users" | "groups" | "doc-classes" | "webhooks" | "retention" | "reports" | "ai-agents" | "sso";
+export type SettingsTab = "connections" | "users" | "groups" | "doc-classes" | "webhooks" | "retention" | "reports" | "ai-agents" | "ai-settings" | "sso";
 
 // requiredFeature: undefined means "any authenticated user" — mirrors the
 // backend 1:1 (only routes actually gated by require_feature() get a tab
@@ -25,6 +26,7 @@ const TABS: { key: SettingsTab; label: string; icon: Parameters<typeof Icon>[0][
   { key: "retention", label: "Retention", icon: "lock", requiredFeature: "manage_retention" },
   { key: "reports", label: "Reports", icon: "bar-chart", requiredFeature: "view_activity_log" },
   { key: "ai-agents", label: "AI Agents", icon: "bot", requiredFeature: "manage_ai_agents_admin" },
+  { key: "ai-settings", label: "AI Provider", icon: "message", requiredFeature: "manage_admin_settings" },
   { key: "sso", label: "SSO", icon: "settings", requiredFeature: "manage_admin_settings" },
 ];
 
@@ -77,6 +79,7 @@ export function SettingsPage({
         {tab === "retention" && <RetentionPolicyPanel />}
         {tab === "reports" && <AuditLogPage />}
         {tab === "ai-agents" && <AiAgentsReportPage />}
+        {tab === "ai-settings" && <AiSettingsPanel />}
         {tab === "sso" && <SamlSettingsPanel />}
       </div>
     </div>

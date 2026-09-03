@@ -3,15 +3,30 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-def test_create_list_delete_webhook(client: TestClient, auth_headers):
+def _scope(local_connection, uploaded_file) -> dict:
+    """WebhookCreateRequest requires a connection_id/resource_id/
+    resource_type/resource_name — a webhook is scoped-by-default (see
+    webhook_service.py's own docstring on why an unscoped webhook is
+    deliberately not creatable directly through this endpoint)."""
+    return {
+        "connection_id": local_connection["id"],
+        "resource_id": uploaded_file["id"],
+        "resource_type": "file",
+        "resource_name": uploaded_file["name"],
+    }
+
+
+def test_create_list_delete_webhook(client: TestClient, auth_headers, local_connection, uploaded_file):
     resp = client.post("/webhooks", headers=auth_headers, json={
         "url": "https://example.com/hook",
-        "secret": "mysecret",
+        "secret": "mysecret1",
         "event_types": ["created", "deleted"],
+        **_scope(local_connection, uploaded_file),
     })
     assert resp.status_code == 201, resp.text
     wh = resp.json()
     assert wh["url"] == "https://example.com/hook"
+    assert wh["secret_set"] is True
     assert wh["active"] is True
     assert set(wh["event_types"]) == {"created", "deleted"}
     wid = wh["id"]
@@ -35,21 +50,21 @@ def test_create_list_delete_webhook(client: TestClient, auth_headers):
     assert not any(w["id"] == wid for w in resp5.json())
 
 
-def test_webhook_requires_admin(client: TestClient, auth_headers):
-    # Create a viewer
+def test_webhook_requires_admin(client: TestClient, auth_headers, local_connection, uploaded_file):
     client.post("/users", headers=auth_headers, json={
         "username": "webhook_viewer",
         "password": "viewpass123",
         "display_name": "Viewer",
-        "roles": ["viewer"],
+        "is_superadmin": False,
     })
     login = client.post("/auth/login", json={"username": "webhook_viewer", "password": "viewpass123"})
     viewer_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
 
     resp = client.post("/webhooks", headers=viewer_headers, json={
         "url": "https://example.com/hook",
-        "secret": None,
+        "secret": "somesecret",
         "event_types": [],
+        **_scope(local_connection, uploaded_file),
     })
     assert resp.status_code == 403
 
@@ -68,13 +83,18 @@ def test_webhook_requires_admin(client: TestClient, auth_headers):
     "http://192.168.1.1/hook",
     "ftp://example.com/hook",  # non-http(s) scheme
 ])
-def test_webhook_ssrf_targets_are_rejected(client: TestClient, auth_headers, bad_url):
-    resp = client.post("/webhooks", headers=auth_headers, json={"url": bad_url, "secret": "supersecret", "event_types": []})
+def test_webhook_ssrf_targets_are_rejected(client: TestClient, auth_headers, local_connection, uploaded_file, bad_url):
+    resp = client.post("/webhooks", headers=auth_headers, json={
+        "url": bad_url, "secret": "supersecret", "event_types": [], **_scope(local_connection, uploaded_file),
+    })
     assert resp.status_code == 400, f"{bad_url} should have been rejected, got {resp.status_code}: {resp.text}"
 
 
-def test_webhook_update_also_validates_url(client: TestClient, auth_headers):
-    created = client.post("/webhooks", headers=auth_headers, json={"url": "https://example.com/hook", "secret": "supersecret", "event_types": []}).json()
+def test_webhook_update_also_validates_url(client: TestClient, auth_headers, local_connection, uploaded_file):
+    created = client.post("/webhooks", headers=auth_headers, json={
+        "url": "https://example.com/hook", "secret": "supersecret", "event_types": [],
+        **_scope(local_connection, uploaded_file),
+    }).json()
     try:
         resp = client.patch(f"/webhooks/{created['id']}", headers=auth_headers, json={"url": "http://127.0.0.1/evil"})
         assert resp.status_code == 400
@@ -82,7 +102,7 @@ def test_webhook_update_also_validates_url(client: TestClient, auth_headers):
         client.delete(f"/webhooks/{created['id']}", headers=auth_headers)
 
 
-def test_webhook_secret_is_mandatory(client: TestClient, auth_headers):
+def test_webhook_secret_is_mandatory(client: TestClient, auth_headers, local_connection, uploaded_file):
     """Signing is not optional by design (every delivery is HMAC-signed so
     receivers can verify authenticity) — locking this in as an explicit
     test after the frontend was found advertising the secret field as
@@ -91,18 +111,20 @@ def test_webhook_secret_is_mandatory(client: TestClient, auth_headers):
     backend contract mismatch, not a backend bug, so the fix was in the
     UI copy — but it's worth a test guarding against the schema quietly
     becoming optional later without a matching UI decision to allow it."""
+    scope = _scope(local_connection, uploaded_file)
+
     resp = client.post("/webhooks", headers=auth_headers, json={
-        "url": "https://example.com/hook", "secret": None, "event_types": [],
+        "url": "https://example.com/hook", "secret": None, "event_types": [], **scope,
     })
     assert resp.status_code == 422
 
     resp2 = client.post("/webhooks", headers=auth_headers, json={
-        "url": "https://example.com/hook", "event_types": [],
+        "url": "https://example.com/hook", "event_types": [], **scope,
     })
     assert resp2.status_code == 422
 
     resp3 = client.post("/webhooks", headers=auth_headers, json={
-        "url": "https://example.com/hook", "secret": "short", "event_types": [],
+        "url": "https://example.com/hook", "secret": "short", "event_types": [], **scope,
     })
     assert resp3.status_code == 422
 

@@ -15,45 +15,31 @@ import datetime
 import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "locks.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+locks = sa.Table(
+    "locks", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("connection_id", sa.String(32), nullable=False),
+    sa.Column("resource_id", sa.String(255), nullable=False),
+    sa.Column("locked_by", sa.String(255), nullable=False),
+    sa.Column("locked_at", sa.String(40), nullable=False),
+    sa.Column("comment", sa.Text),
+    sa.Index("idx_locks_resource", "connection_id", "resource_id", unique=True),
+)
+
+_engine = db.get_engine("locks")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS locks (
-                id TEXT PRIMARY KEY,
-                connection_id TEXT NOT NULL,
-                resource_id TEXT NOT NULL,
-                locked_by TEXT NOT NULL,
-                locked_at TEXT NOT NULL,
-                comment TEXT
-            )
-            """
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_locks_resource "
-            "ON locks (connection_id, resource_id)"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "locks")
 
 
-def _row(row: sqlite3.Row) -> dict:
+def _row(row) -> dict:
     return {
         "id": row["id"],
         "connection_id": row["connection_id"],
@@ -68,57 +54,53 @@ def checkout(connection_id: str, resource_id: str, locked_by: str, comment: str 
     """Raises sqlite3.IntegrityError if already locked (caller converts to HTTP 409)."""
     lock_id = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
     try:
-        conn.execute(
-            "INSERT INTO locks (id, connection_id, resource_id, locked_by, locked_at, comment) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (lock_id, connection_id, resource_id, locked_by, now, comment),
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM locks WHERE id = ?", (lock_id,)).fetchone()
-        return _row(row)
-    finally:
-        conn.close()
+        with _engine.begin() as conn:
+            conn.execute(
+                locks.insert().values(
+                    id=lock_id,
+                    connection_id=connection_id,
+                    resource_id=resource_id,
+                    locked_by=locked_by,
+                    locked_at=now,
+                    comment=comment,
+                )
+            )
+            row = conn.execute(sa.select(locks).where(locks.c.id == lock_id)).mappings().first()
+    except sa.exc.IntegrityError as exc:
+        # Re-raised as sqlite3.IntegrityError (rather than left as
+        # sa.exc.IntegrityError) so the router's existing
+        # `except sqlite3.IntegrityError` keeps working unchanged across every
+        # backend dialect — sqlite/postgres/oracle each raise their own
+        # driver-specific unique-violation error, which SQLAlchemy always
+        # wraps in sa.exc.IntegrityError regardless of dialect.
+        raise sqlite3.IntegrityError(str(exc)) from exc
+    return _row(row)
 
 
 def checkin(connection_id: str, resource_id: str) -> None:
     """Releases the lock regardless of who holds it (router validates ownership before calling)."""
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM locks WHERE connection_id = ? AND resource_id = ?", (connection_id, resource_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            locks.delete().where(locks.c.connection_id == connection_id, locks.c.resource_id == resource_id)
+        )
 
 
 def get_lock(connection_id: str, resource_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute(
-            "SELECT * FROM locks WHERE connection_id = ? AND resource_id = ?", (connection_id, resource_id)
-        ).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+    stmt = sa.select(locks).where(locks.c.connection_id == connection_id, locks.c.resource_id == resource_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return _row(row) if row else None
 
 
 def list_locks(connection_id: str) -> list[dict]:
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM locks WHERE connection_id = ? ORDER BY locked_at DESC", (connection_id,)
-        ).fetchall()
-        return [_row(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = sa.select(locks).where(locks.c.connection_id == connection_id).order_by(locks.c.locked_at.desc())
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def delete_for_connection(connection_id: str) -> None:
     """Remove all lock records belonging to a connection (called when a connection is deleted)."""
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM locks WHERE connection_id = ?", (connection_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(locks.delete().where(locks.c.connection_id == connection_id))

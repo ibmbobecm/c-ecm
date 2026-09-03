@@ -1,0 +1,4 @@
+# Extra dependencies layered on top of backend/requirements.txt for the
+# production Docker image only -- kept separate so the base requirements
+# file stays engine-agnostic for local dev (see backend/.env.example).
+psycopg[binary]>=3.2   # FD_DB_ENGINE=postgres — the recommended production database (see deploy/README.md)

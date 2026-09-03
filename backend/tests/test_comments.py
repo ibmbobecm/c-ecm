@@ -36,6 +36,52 @@ def test_editing_nonexistent_comment_is_404(client, conn_headers):
     assert resp.status_code == 404
 
 
+def _make_user(client, auth_headers, username: str) -> dict:
+    client.post("/users", headers=auth_headers, json={
+        "username": username, "password": "testpass123", "display_name": username,
+    })
+    login = client.post("/auth/login", json={"username": username, "password": "testpass123"})
+    return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+
+def _delete_user(client, auth_headers, username: str) -> None:
+    for u in client.get("/users", headers=auth_headers).json():
+        if u["username"] == username:
+            client.delete(f"/users/{u['id']}", headers=auth_headers)
+
+
+def test_only_author_or_superadmin_can_edit_or_delete_a_comment(client, conn_headers, uploaded_file, auth_headers, local_connection):
+    # Previously edit/resolve/delete were all gated purely by resource-level
+    # "view" access — any viewer of the resource could alter or delete
+    # someone else's comment. Resolving stays a collaborative, view-level
+    # action; editing the text and deleting are now author-or-superadmin.
+    other_headers = _make_user(client, auth_headers, "comment_outsider")
+    other_headers["X-Connection-Id"] = local_connection["id"]
+    try:
+        created = client.post(
+            f"/resources/{uploaded_file['id']}/comments", headers=conn_headers,
+            json={"resource_type": "file", "body": "admin's comment"},
+        ).json()
+
+        # A different, non-author, non-superadmin user can still resolve it...
+        resolve = client.patch(f"/comments/{created['id']}", headers=other_headers, json={"resolved": True})
+        assert resolve.status_code == 200
+
+        # ...but cannot edit its text...
+        edit = client.patch(f"/comments/{created['id']}", headers=other_headers, json={"body": "hacked"})
+        assert edit.status_code == 403
+
+        # ...or delete it.
+        delete = client.delete(f"/comments/{created['id']}", headers=other_headers)
+        assert delete.status_code == 403
+
+        # The author themself still can.
+        assert client.patch(f"/comments/{created['id']}", headers=conn_headers, json={"body": "edited by author"}).status_code == 200
+        assert client.delete(f"/comments/{created['id']}", headers=conn_headers).status_code == 204
+    finally:
+        _delete_user(client, auth_headers, "comment_outsider")
+
+
 def test_comments_cleaned_up_when_connection_deleted(client, auth_headers):
     conn = client.post(
         "/connections", headers=auth_headers,

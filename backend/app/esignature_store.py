@@ -6,53 +6,41 @@ on DocuSign's side; this module never touches document content.
 
 import datetime
 import json
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "esignature.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+esignature_requests = sa.Table(
+    "esignature_requests", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("connection_id", sa.String(32), nullable=False),
+    sa.Column("resource_id", sa.String(255), nullable=False),
+    sa.Column("resource_type", sa.String(64), nullable=False),
+    sa.Column("resource_name", sa.String(255)),
+    sa.Column("envelope_id", sa.String(64), nullable=False),
+    sa.Column("status", sa.String(64), nullable=False, server_default="sent"),
+    sa.Column("signers_json", sa.Text, nullable=False, server_default="[]"),
+    sa.Column("subject", sa.Text),
+    sa.Column("requested_by", sa.String(255), nullable=False),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Column("completed_at", sa.String(40)),
+    sa.Column("signed_version_number", sa.Integer),
+    sa.Index("idx_esig_resource", "connection_id", "resource_id"),
+    sa.Index("idx_esig_envelope", "envelope_id", unique=True),
+)
+
+_engine = db.get_engine("esignature")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS esignature_requests (
-                id TEXT PRIMARY KEY,
-                connection_id TEXT NOT NULL,
-                resource_id TEXT NOT NULL,
-                resource_type TEXT NOT NULL,
-                resource_name TEXT,
-                envelope_id TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'sent',
-                signers_json TEXT NOT NULL DEFAULT '[]',
-                subject TEXT,
-                requested_by TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                completed_at TEXT,
-                signed_version_number INTEGER
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_esig_resource ON esignature_requests (connection_id, resource_id)")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_esig_envelope ON esignature_requests (envelope_id)")
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "esignature")
 
 
-def _row(row: sqlite3.Row) -> dict:
+def _row(row) -> dict:
     return {
         "id": row["id"],
         "connection_id": row["connection_id"],
@@ -76,96 +64,84 @@ def create(
 ) -> dict:
     rid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO esignature_requests "
-            "(id, connection_id, resource_id, resource_type, resource_name, envelope_id, status, signers_json, "
-            "subject, requested_by, created_at) VALUES (?, ?, ?, ?, ?, ?, 'sent', ?, ?, ?, ?)",
-            (rid, connection_id, resource_id, resource_type, resource_name, envelope_id,
-             json.dumps(signers), subject, requested_by, now),
+            esignature_requests.insert().values(
+                id=rid, connection_id=connection_id, resource_id=resource_id, resource_type=resource_type,
+                resource_name=resource_name, envelope_id=envelope_id, status="sent",
+                signers_json=json.dumps(signers), subject=subject, requested_by=requested_by, created_at=now,
+            )
         )
-        conn.commit()
-        return _row(conn.execute("SELECT * FROM esignature_requests WHERE id = ?", (rid,)).fetchone())
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(esignature_requests).where(esignature_requests.c.id == rid)).mappings().first()
+    return _row(row)
 
 
 def get(request_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM esignature_requests WHERE id = ?", (request_id,)).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+    with _engine.connect() as conn:
+        row = conn.execute(
+            sa.select(esignature_requests).where(esignature_requests.c.id == request_id)
+        ).mappings().first()
+    return _row(row) if row else None
 
 
 def get_by_envelope_id(envelope_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM esignature_requests WHERE envelope_id = ?", (envelope_id,)).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+    with _engine.connect() as conn:
+        row = conn.execute(
+            sa.select(esignature_requests).where(esignature_requests.c.envelope_id == envelope_id)
+        ).mappings().first()
+    return _row(row) if row else None
 
 
 def list_for_resource(connection_id: str, resource_id: str) -> list[dict]:
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM esignature_requests WHERE connection_id = ? AND resource_id = ? ORDER BY created_at DESC",
-            (connection_id, resource_id),
-        ).fetchall()
-        return [_row(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = (
+        sa.select(esignature_requests)
+        .where(esignature_requests.c.connection_id == connection_id, esignature_requests.c.resource_id == resource_id)
+        .order_by(esignature_requests.c.created_at.desc())
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def list_all(*, connection_id: str | None = None, status: str | None = None) -> list[dict]:
-    clauses, params = [], []
+    stmt = sa.select(esignature_requests)
     if connection_id:
-        clauses.append("connection_id = ?")
-        params.append(connection_id)
+        stmt = stmt.where(esignature_requests.c.connection_id == connection_id)
     if status:
-        clauses.append("status = ?")
-        params.append(status)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    conn = _conn()
-    try:
-        rows = conn.execute(f"SELECT * FROM esignature_requests {where} ORDER BY created_at DESC", params).fetchall()
-        return [_row(r) for r in rows]
-    finally:
-        conn.close()
+        stmt = stmt.where(esignature_requests.c.status == status)
+    stmt = stmt.order_by(esignature_requests.c.created_at.desc())
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def update_status(request_id: str, status: str, *, completed: bool = False, signed_version_number: int | None = None) -> None:
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         if completed:
             conn.execute(
-                "UPDATE esignature_requests SET status = ?, completed_at = ?, signed_version_number = ? WHERE id = ?",
-                (status, datetime.datetime.now(datetime.timezone.utc).isoformat(), signed_version_number, request_id),
+                esignature_requests.update()
+                .where(esignature_requests.c.id == request_id)
+                .values(
+                    status=status,
+                    completed_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    signed_version_number=signed_version_number,
+                )
             )
         else:
-            conn.execute("UPDATE esignature_requests SET status = ? WHERE id = ?", (status, request_id))
-        conn.commit()
-    finally:
-        conn.close()
+            conn.execute(
+                esignature_requests.update().where(esignature_requests.c.id == request_id).values(status=status)
+            )
 
 
 def delete_for_resource(connection_id: str, resource_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM esignature_requests WHERE connection_id = ? AND resource_id = ?", (connection_id, resource_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            esignature_requests.delete().where(
+                esignature_requests.c.connection_id == connection_id, esignature_requests.c.resource_id == resource_id
+            )
+        )
 
 
 def delete_for_connection(connection_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM esignature_requests WHERE connection_id = ?", (connection_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(esignature_requests.delete().where(esignature_requests.c.connection_id == connection_id))

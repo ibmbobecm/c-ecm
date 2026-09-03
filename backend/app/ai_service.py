@@ -7,24 +7,20 @@ Provides three capabilities:
   3. Q&A: answer a question against document content using a simple
      sliding-window context approach (no external vector DB required).
 
-AI backend is configurable via FD_AI_BACKEND:
-  - "openai"        → OpenAI-compatible API (default model: gpt-4o-mini)
+AI backend is configurable via FD_AI_BACKEND, or at runtime from Admin
+Settings → AI (no restart needed — see refresh_from_settings() below):
+  - "anthropic"     → Anthropic's Claude (default model: claude-sonnet-5)
+  - "openai"        → OpenAI-compatible API (default model: gpt-4o-mini) —
+                       this is also how real OpenAI/ChatGPT is used
   - "ollama"        → local Ollama instance (default model: llama3)
   - "watsonx"       → IBM watsonx.ai (granite-4-h-small or configured model)
   - "watson_nlu"    → IBM Watson Natural Language Understanding (classification only)
   - "watson_disco"  → IBM Watson Discovery (search + Q&A from corpus)
   - "none"          → AI disabled; endpoints return 503
 
-Watson environment variables:
-  IBM_CLOUD_API_KEY         IBM Cloud API key (IAM)
-  WATSONX_PROJECT_ID        watsonx.ai project ID
-  WATSONX_URL               watsonx.ai endpoint (default: https://us-south.ml.cloud.ibm.com)
-  WATSONX_MODEL             LLM model id (default: ibm/granite-4-h-small)
-  WATSON_NLU_URL            Watson NLU instance URL
-  WATSON_NLU_APIKEY         Watson NLU API key
-  WATSON_DISCO_URL          Watson Discovery instance URL
-  WATSON_DISCO_APIKEY       Watson Discovery API key
-  WATSON_DISCO_PROJECT_ID   Watson Discovery project ID
+Every backend's credentials/model live in config.py (env-var defaults) and
+can be overridden per-deployment from Admin Settings, same as the OAuth
+storage providers' client id/secret.
 
 This module is deliberately side-effect-free: it never reads from or
 writes to any store.  Callers (the router) decide what to persist.
@@ -33,7 +29,6 @@ writes to any store.  Callers (the router) decide what to persist.
 import io
 import json
 import logging
-import os
 import re
 from typing import Literal, NamedTuple
 
@@ -44,7 +39,7 @@ logger = logging.getLogger("ai_service")
 # ---------------------------------------------------------------------------
 # Configuration
 #
-# The Watson/backend-selection values below are "resolved" globals: read
+# The backend-selection values below are "resolved" globals: read
 # from config.py (env vars) at import time, same as before, but also
 # reassignable at runtime by refresh_from_settings() so Admin Settings can
 # override them without a server restart -- the same fallback pattern
@@ -62,14 +57,18 @@ logger = logging.getLogger("ai_service")
 
 _BACKEND = _config.FD_AI_BACKEND_DEFAULT
 
+# Anthropic (Claude)
+_ANTHROPIC_API_KEY = _config.FD_ANTHROPIC_API_KEY
+_ANTHROPIC_MODEL = _config.FD_ANTHROPIC_MODEL
+
 # OpenAI / compatible
-_AI_API_KEY = os.environ.get("FD_AI_API_KEY", "")
-_AI_BASE_URL = os.environ.get("FD_AI_BASE_URL", "https://api.openai.com/v1")
-_AI_MODEL = os.environ.get("FD_AI_MODEL", "gpt-4o-mini")
+_AI_API_KEY = _config.FD_AI_API_KEY
+_AI_BASE_URL = _config.FD_AI_BASE_URL
+_AI_MODEL = _config.FD_AI_MODEL
 
 # Ollama
-_OLLAMA_URL = os.environ.get("FD_OLLAMA_URL", "http://localhost:11434")
-_OLLAMA_MODEL = os.environ.get("FD_OLLAMA_MODEL", "llama3")
+_OLLAMA_URL = _config.FD_OLLAMA_URL
+_OLLAMA_MODEL = _config.FD_OLLAMA_MODEL
 
 # IBM watsonx.ai
 _IBM_CLOUD_API_KEY = _config.IBM_CLOUD_API_KEY
@@ -90,7 +89,7 @@ _MAX_CONTEXT_CHARS = 12_000  # keep prompts within reasonable token limits
 
 
 def refresh_from_settings() -> None:
-    """Reload the Watson/backend-selection globals from settings_store,
+    """Reload the backend-selection globals from settings_store,
     falling back to whatever config.py resolved from the environment at
     import time. Call after an admin saves new AI settings (so the change
     takes effect without restarting the process) and once at app startup
@@ -99,6 +98,7 @@ def refresh_from_settings() -> None:
     """
     global _BACKEND, _IBM_CLOUD_API_KEY, _WATSONX_PROJECT_ID, _WATSONX_URL, _WATSONX_MODEL
     global _WATSON_NLU_URL, _WATSON_NLU_APIKEY, _WATSON_DISCO_URL, _WATSON_DISCO_APIKEY, _WATSON_DISCO_PROJECT_ID
+    global _ANTHROPIC_API_KEY, _ANTHROPIC_MODEL, _AI_API_KEY, _AI_BASE_URL, _AI_MODEL, _OLLAMA_URL, _OLLAMA_MODEL
     from . import settings_store
 
     _BACKEND = settings_store.get_setting("ai_backend", _config.FD_AI_BACKEND_DEFAULT).lower()
@@ -113,6 +113,13 @@ def refresh_from_settings() -> None:
     _WATSON_DISCO_PROJECT_ID = settings_store.get_setting(
         "watson_disco_project_id", _config.WATSON_DISCO_PROJECT_ID
     )
+    _ANTHROPIC_API_KEY = settings_store.get_setting("anthropic_api_key", _config.FD_ANTHROPIC_API_KEY)
+    _ANTHROPIC_MODEL = settings_store.get_setting("anthropic_model", _config.FD_ANTHROPIC_MODEL)
+    _AI_API_KEY = settings_store.get_setting("ai_api_key", _config.FD_AI_API_KEY)
+    _AI_BASE_URL = settings_store.get_setting("ai_base_url", _config.FD_AI_BASE_URL)
+    _AI_MODEL = settings_store.get_setting("ai_model", _config.FD_AI_MODEL)
+    _OLLAMA_URL = settings_store.get_setting("ollama_url", _config.FD_OLLAMA_URL)
+    _OLLAMA_MODEL = settings_store.get_setting("ollama_model", _config.FD_OLLAMA_MODEL)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +328,46 @@ def _call_watsonx_with_usage(prompt: str, max_tokens: int = 512) -> tuple[str, i
         return "", None
 
 
+# --------------- Anthropic (Claude) ----------------------------------------
+
+_ANTHROPIC_API_VERSION = "2023-06-01"
+
+
+def _call_anthropic(prompt: str) -> str:
+    return _call_anthropic_with_usage(prompt)[0]
+
+
+def _call_anthropic_with_usage(prompt: str, max_tokens: int = 512) -> tuple[str, int | None]:
+    try:
+        import requests as _requests  # type: ignore
+        resp = _requests.post(
+            "https://api.anthropic.com/v1/messages",
+            json={
+                "model": _ANTHROPIC_MODEL,
+                "max_tokens": max_tokens,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            headers={
+                "x-api-key": _ANTHROPIC_API_KEY,
+                "anthropic-version": _ANTHROPIC_API_VERSION,
+                "Content-Type": "application/json",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        blocks = data.get("content", [])
+        text = "".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip()
+        usage = data.get("usage") or {}
+        tokens = None
+        if "input_tokens" in usage and "output_tokens" in usage:
+            tokens = usage["input_tokens"] + usage["output_tokens"]
+        return text, tokens
+    except Exception as exc:
+        logger.warning("Anthropic call failed: %s", exc)
+        return "", None
+
+
 # --------------- Watson NLU (classification only) --------------------------
 
 def _call_watson_nlu_classify(text: str, class_labels: list[str]) -> str | None:
@@ -434,6 +481,8 @@ def _call_watson_discovery_ask(question: str) -> str:
 # --------------- unified LLM dispatcher -----------------------------------
 
 def _llm(prompt: str) -> str:
+    if _BACKEND == "anthropic":
+        return _call_anthropic(prompt)
     if _BACKEND == "openai":
         return _call_openai_compatible(prompt)
     if _BACKEND == "ollama":
@@ -467,6 +516,11 @@ def llm_with_usage(prompt: str, max_tokens: int = 512) -> tuple[str, int | None,
     a much longer structured response (e.g. drafting a whole site's worth
     of copy) must raise it explicitly — a truncated response cuts off
     mid-JSON and fails to parse rather than merely reading short."""
+    if _BACKEND == "anthropic":
+        text, tokens = _call_anthropic_with_usage(prompt, max_tokens=max_tokens)
+        if tokens is not None:
+            return text, tokens, False
+        return text, (_estimate_tokens(prompt, text) if text else None), True
     if _BACKEND == "openai":
         text, tokens = _call_openai_compatible_with_usage(prompt, max_tokens=max_tokens)
         if tokens is not None:

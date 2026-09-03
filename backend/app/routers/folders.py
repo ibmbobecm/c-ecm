@@ -79,6 +79,22 @@ def _cleanup_local_data(session: CurrentSession, resource_id: str, resource_type
     resource_permissions_store.delete_for_resource(session.connection_id, resource_id)
 
 
+def _cleanup_local_data_batch(session: CurrentSession, resource_ids: list[str]) -> None:
+    """Same 7-store cleanup as _cleanup_local_data(), for many resources at
+    once — one connect/commit per store instead of one per store PER
+    resource. Used when permanently deleting a folder with descendants:
+    calling _cleanup_local_data() in a Python loop meant 7 fresh SQLite
+    connections opened per descendant."""
+    connection_id = session.connection_id
+    tags_store.delete_for_resources_batch(connection_id, resource_ids)
+    comments_store.delete_for_resources_batch(connection_id, resource_ids)
+    share_links_store.delete_for_resources_batch(connection_id, resource_ids)
+    metadata_store.delete_for_resources_batch(connection_id, resource_ids)
+    workflows_store.delete_for_resources_batch(connection_id, resource_ids)
+    ai_agents_store.delete_for_resources_batch(connection_id, resource_ids)
+    resource_permissions_store.delete_for_resources_batch(connection_id, resource_ids)
+
+
 def _actor(session: CurrentSession) -> str:
     return session.user.get("username") or session.creds.get("username") or "unknown"
 
@@ -203,9 +219,7 @@ def delete_folder_permanent(folder_id: str, session: CurrentSession = Depends(ge
         session.provider.delete_folder(session.creds, folder_id)
     except ProviderError as exc:
         raise to_http(exc)
-    _cleanup_local_data(session, folder_id, "folder")
-    for d in descendants:
-        _cleanup_local_data(session, d["resource_id"], d["resource_type"])
+    _cleanup_local_data_batch(session, [folder_id, *(d["resource_id"] for d in descendants)])
     activity_service.record_event(
         connection_id=session.connection_id, provider_key=session.provider_key, resource_type="folder",
         resource_id=folder_id, resource_name=name, event_type="permanently_deleted", actor=_actor(session),

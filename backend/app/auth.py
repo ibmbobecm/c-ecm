@@ -34,7 +34,14 @@ from .config import JWT_ALGORITHM, JWT_EXPIRE_MINUTES, JWT_SECRET
 from .storage_providers.base import ProviderError, StorageProvider
 from .storage_providers.registry import get_provider
 
-_security = HTTPBearer()
+_security = HTTPBearer(
+    description=(
+        "The access_token returned by POST /auth/login (or the SAML ACS "
+        "callback). Paste it here as-is — Swagger adds the 'Bearer ' "
+        "prefix for you. Tokens expire after FD_JWT_EXPIRE_MINUTES "
+        "(24 hours by default); call /auth/login again once expired."
+    )
+)
 
 # session_id → username  (in-memory; cleared on restart, which also invalidates
 # all existing JWTs — acceptable for a local/on-prem deployment).
@@ -186,7 +193,10 @@ def require_feature(feature_key: str):
 
 def get_current_session(
     user: CurrentUser = Depends(get_current_user),
-    x_connection_id: str | None = Header(default=None),
+    x_connection_id: str | None = Header(
+        default=None,
+        description="ID of the connection this request operates against — see GET /connections for the list of connections available to you and their ids.",
+    ),
 ) -> CurrentSession:
     """Resolves which backend connection a content request applies to."""
     if not x_connection_id:

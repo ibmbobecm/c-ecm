@@ -27,18 +27,50 @@ import ipaddress
 import json
 import logging
 import socket
-import sqlite3
 import threading
 import time
 import uuid
 from urllib.parse import urlparse
 
 import requests
+import sqlalchemy as sa
 
-from .config import DATA_DIR
+from . import crypto_util
+from . import db
 
 logger = logging.getLogger("webhook_service")
-_DB_PATH = DATA_DIR / "webhooks.db"
+
+_metadata = sa.MetaData()
+
+webhooks = sa.Table(
+    "webhooks", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("url", sa.Text, nullable=False),
+    sa.Column("secret", sa.Text),
+    sa.Column("event_types_json", sa.Text, nullable=False, server_default="[]"),
+    sa.Column("active", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Column("last_triggered_at", sa.String(40)),
+    sa.Column("last_status_code", sa.Integer),
+    sa.Column("connection_id", sa.String(32)),
+    sa.Column("resource_id", sa.String(255)),
+    sa.Column("resource_type", sa.String(64)),
+    sa.Column("resource_name", sa.Text),
+    sa.Column("destination_type", sa.String(64), nullable=False, server_default="custom"),
+)
+
+webhook_deliveries = sa.Table(
+    "webhook_deliveries", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("webhook_id", sa.String(32), nullable=False),
+    sa.Column("event_id", sa.String(32)),
+    sa.Column("attempt", sa.Integer, nullable=False, server_default="1"),
+    sa.Column("status_code", sa.Integer),
+    sa.Column("error", sa.Text),
+    sa.Column("delivered_at", sa.String(40), nullable=False),
+)
+
+_engine = db.get_engine("webhooks")
 
 
 class WebhookUrlError(ValueError):
@@ -71,70 +103,28 @@ def _validate_webhook_url(url: str) -> None:
             raise WebhookUrlError(f"Webhook URL resolves to a non-public address ({ip}) — not allowed")
 
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
-
-
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS webhooks (
-                id TEXT PRIMARY KEY,
-                url TEXT NOT NULL,
-                secret TEXT,
-                event_types_json TEXT NOT NULL DEFAULT '[]',
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at TEXT NOT NULL,
-                last_triggered_at TEXT,
-                last_status_code INTEGER,
-                connection_id TEXT,
-                resource_id TEXT,
-                resource_type TEXT,
-                resource_name TEXT,
-                destination_type TEXT NOT NULL DEFAULT 'custom'
-            )
-            """
-        )
-        # Older databases created before scoping/destination-type existed --
-        # SQLite has no "ADD COLUMN IF NOT EXISTS", so check the schema and
-        # add whatever's missing instead of forcing everyone to delete their
-        # data.
-        existing_cols = {r["name"] for r in conn.execute("PRAGMA table_info(webhooks)").fetchall()}
-        for col in ("connection_id", "resource_id", "resource_type", "resource_name"):
-            if col not in existing_cols:
-                conn.execute(f"ALTER TABLE webhooks ADD COLUMN {col} TEXT")
-        if "destination_type" not in existing_cols:
-            conn.execute("ALTER TABLE webhooks ADD COLUMN destination_type TEXT NOT NULL DEFAULT 'custom'")
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS webhook_deliveries (
-                id TEXT PRIMARY KEY,
-                webhook_id TEXT NOT NULL,
-                event_id TEXT,
-                attempt INTEGER NOT NULL DEFAULT 1,
-                status_code INTEGER,
-                error TEXT,
-                delivered_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "webhooks")
+
+    # One-time migration: encrypt any webhook secret still holding plain
+    # text from before encryption-at-rest existed. ensure_encrypted is
+    # idempotent, so this is safe on every startup — an already-encrypted
+    # (or empty) secret is read back unchanged and skipped.
+    with _engine.begin() as conn:
+        rows = conn.execute(sa.select(webhooks.c.id, webhooks.c.secret)).mappings().all()
+        for row in rows:
+            if not row["secret"]:
+                continue
+            upgraded = crypto_util.ensure_encrypted(row["secret"])
+            if upgraded != row["secret"]:
+                conn.execute(webhooks.update().where(webhooks.c.id == row["id"]).values(secret=upgraded))
 
 
-def _row(row: sqlite3.Row) -> dict:
+def _row(row) -> dict:
     return {
         "id": row["id"],
         "url": row["url"],
-        "secret": row["secret"] or None,
+        "secret": crypto_util.decrypt(row["secret"]) if row["secret"] else None,
         "event_types": json.loads(row["event_types_json"]),
         "active": bool(row["active"]),
         "created_at": row["created_at"],
@@ -149,20 +139,17 @@ def _row(row: sqlite3.Row) -> dict:
 
 
 def list_webhooks() -> list[dict]:
-    conn = _conn()
-    try:
-        return [_row(r) for r in conn.execute("SELECT * FROM webhooks ORDER BY created_at").fetchall()]
-    finally:
-        conn.close()
+    stmt = sa.select(webhooks).order_by(webhooks.c.created_at)
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def get_webhook(webhook_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM webhooks WHERE id = ?", (webhook_id,)).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+    stmt = sa.select(webhooks).where(webhooks.c.id == webhook_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return _row(row) if row else None
 
 
 def create_webhook(url: str, secret: str | None, event_types: list[str], *, connection_id: str | None = None,
@@ -171,20 +158,17 @@ def create_webhook(url: str, secret: str | None, event_types: list[str], *, conn
     _validate_webhook_url(url)
     wid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO webhooks (id, url, secret, event_types_json, active, created_at, "
-            "connection_id, resource_id, resource_type, resource_name, destination_type) "
-            "VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)",
-            (wid, url, secret or "", json.dumps(event_types), now, connection_id, resource_id, resource_type,
-             resource_name, destination_type),
+            webhooks.insert().values(
+                id=wid, url=url, secret=crypto_util.encrypt(secret) if secret else "",
+                event_types_json=json.dumps(event_types), active=True, created_at=now,
+                connection_id=connection_id, resource_id=resource_id, resource_type=resource_type,
+                resource_name=resource_name, destination_type=destination_type,
+            )
         )
-        conn.commit()
-        row = conn.execute("SELECT * FROM webhooks WHERE id = ?", (wid,)).fetchone()
-        return _row(row)
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(webhooks).where(webhooks.c.id == wid)).mappings().first()
+    return _row(row)
 
 
 def update_webhook(webhook_id: str, *, url: str | None = None, secret: str | None = None,
@@ -194,44 +178,35 @@ def update_webhook(webhook_id: str, *, url: str | None = None, secret: str | Non
                    destination_type: str | None = None, clear_scope: bool = False) -> dict | None:
     if url is not None:
         _validate_webhook_url(url)
-    conn = _conn()
-    try:
-        updates = []
-        if url is not None:
-            updates.append(("url", url))
-        if secret is not None:
-            updates.append(("secret", secret))
-        if event_types is not None:
-            updates.append(("event_types_json", json.dumps(event_types)))
-        if active is not None:
-            updates.append(("active", int(active)))
-        if destination_type is not None:
-            updates.append(("destination_type", destination_type))
-        if clear_scope:
-            updates.extend([("connection_id", None), ("resource_id", None), ("resource_type", None), ("resource_name", None)])
-        elif resource_id is not None:
-            updates.extend([
-                ("connection_id", connection_id), ("resource_id", resource_id),
-                ("resource_type", resource_type), ("resource_name", resource_name),
-            ])
+    updates: dict = {}
+    if url is not None:
+        updates["url"] = url
+    if secret is not None:
+        updates["secret"] = crypto_util.encrypt(secret) if secret else ""
+    if event_types is not None:
+        updates["event_types_json"] = json.dumps(event_types)
+    if active is not None:
+        updates["active"] = active
+    if destination_type is not None:
+        updates["destination_type"] = destination_type
+    if clear_scope:
+        updates.update({"connection_id": None, "resource_id": None, "resource_type": None, "resource_name": None})
+    elif resource_id is not None:
+        updates.update({
+            "connection_id": connection_id, "resource_id": resource_id,
+            "resource_type": resource_type, "resource_name": resource_name,
+        })
+    with _engine.begin() as conn:
         if updates:
-            set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
-            conn.execute(f"UPDATE webhooks SET {set_clause} WHERE id = ?", (*[v for _, v in updates], webhook_id))
-            conn.commit()
-        row = conn.execute("SELECT * FROM webhooks WHERE id = ?", (webhook_id,)).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+            conn.execute(webhooks.update().where(webhooks.c.id == webhook_id).values(**updates))
+        row = conn.execute(sa.select(webhooks).where(webhooks.c.id == webhook_id)).mappings().first()
+    return _row(row) if row else None
 
 
 def delete_webhook(webhook_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM webhook_deliveries WHERE webhook_id = ?", (webhook_id,))
-        conn.execute("DELETE FROM webhooks WHERE id = ?", (webhook_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(webhook_deliveries.delete().where(webhook_deliveries.c.webhook_id == webhook_id))
+        conn.execute(webhooks.delete().where(webhooks.c.id == webhook_id))
 
 
 # ---------- delivery -------------------------------------------------------
@@ -294,20 +269,18 @@ def _deliver_one(webhook: dict, event: dict) -> None:
 
     # Record delivery outcome
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO webhook_deliveries (id, webhook_id, event_id, attempt, status_code, error, delivered_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (uuid.uuid4().hex, webhook["id"], event.get("id"), attempt, last_code, last_error, now),
+            webhook_deliveries.insert().values(
+                id=uuid.uuid4().hex, webhook_id=webhook["id"], event_id=event.get("id"),
+                attempt=attempt, status_code=last_code, error=last_error, delivered_at=now,
+            )
         )
         conn.execute(
-            "UPDATE webhooks SET last_triggered_at = ?, last_status_code = ? WHERE id = ?",
-            (now, last_code, webhook["id"]),
+            webhooks.update().where(webhooks.c.id == webhook["id"]).values(
+                last_triggered_at=now, last_status_code=last_code
+            )
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def _matches_scope(webhook: dict, event: dict) -> bool:
@@ -334,17 +307,15 @@ def _matches_scope(webhook: dict, event: dict) -> bool:
 def on_event(event: dict) -> None:
     """Activity-service subscriber: dispatches to all matching active webhooks in background threads."""
     event_type = event.get("event_type", "")
-    conn = _conn()
-    try:
-        rows = conn.execute("SELECT * FROM webhooks WHERE active = 1").fetchall()
-        matching = []
-        for row in rows:
-            types = json.loads(row["event_types_json"])
-            wh = _row(row)
-            if (not types or event_type in types) and _matches_scope(wh, event):
-                matching.append(wh)
-    finally:
-        conn.close()
+    stmt = sa.select(webhooks).where(webhooks.c.active.is_(True))
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    matching = []
+    for row in rows:
+        types = json.loads(row["event_types_json"])
+        wh = _row(row)
+        if (not types or event_type in types) and _matches_scope(wh, event):
+            matching.append(wh)
 
     for wh in matching:
         threading.Thread(target=_deliver_one, args=(wh, event), daemon=True).start()

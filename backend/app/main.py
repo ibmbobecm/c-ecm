@@ -120,7 +120,75 @@ async def lifespan(app: FastAPI):
     logger.info("Retention scheduler stopped")
 
 
-app = FastAPI(title="C-ECM", lifespan=lifespan)
+_API_DESCRIPTION = """
+C-ECM is a unified REST API over many document/content-management backends —
+IBM FileNet, S3-compatible object storage, Google Drive, Box, SharePoint,
+and 50+ other connectors — behind one consistent set of endpoints for
+files, folders, search, sharing, workflows, and more.
+
+### Authentication
+1. `POST /auth/login` with a username and password to get an `access_token`
+   (valid 24 hours by default — configurable via `FD_JWT_EXPIRE_MINUTES`).
+2. Click **Authorize** above and paste the token as-is; Swagger adds the
+   `Bearer ` prefix for you. Every request made from this page will then
+   carry it.
+3. SAML single sign-on (`/saml/...`) reaches the same kind of session
+   through a browser redirect instead — not practical for a non-interactive
+   integration, so most integrators will use step 1.
+
+### Working with a connection
+Most endpoints under `folders`, `files`, `tags`, `comments`, `metadata`,
+`locks`, `sharing`, `workflows`, and `esignature` require an
+`X-Connection-Id` header naming *which* backend connection to operate
+against. Call `GET /connections` once authenticated to list the
+connections available to your account and their ids.
+
+### Permissions
+Some endpoints require a specific feature grant (e.g. `manage_users`,
+`manage_workflow_definitions`) via the group(s) your account belongs to —
+a superadmin account bypasses every check. A `403` response means your
+account is missing the required feature; a `401` means the token is
+missing, invalid, or expired.
+""".strip()
+
+_OPENAPI_TAGS = [
+    {"name": "auth", "description": "Log in, log out, and check who you are. Start here to get a bearer token."},
+    {"name": "connections", "description": "Connect to a storage backend and list your connections. Most other endpoints need an X-Connection-Id from here."},
+    {"name": "folders", "description": "Browse, create, rename, move, and trash folders within a connection."},
+    {"name": "files", "description": "Upload, download, version, rename, move, and trash files within a connection."},
+    {"name": "search", "description": "Search within one connection, or across every connection at once."},
+    {"name": "tags", "description": "Attach and remove color-coded tags on files and folders."},
+    {"name": "comments", "description": "Threaded comments and @mentions on a file or folder."},
+    {"name": "metadata", "description": "Document classes (custom field schemas) and the metadata values attached to a resource."},
+    {"name": "locks", "description": "Check a file out for exclusive editing, then check it back in."},
+    {"name": "sharing", "description": "Create shareable links (view/comment/edit) for files and folders, including password-protected anonymous access."},
+    {"name": "sharing-public", "description": "The public, unauthenticated endpoint a share link itself resolves to."},
+    {"name": "permissions", "description": "Read a resource's native permissions as reported by its storage backend."},
+    {"name": "access-grants", "description": "C-ECM's own view/edit access control for individual files and folders — separate from, and layered on top of, the backend's native permissions."},
+    {"name": "workflows", "description": "Multi-step approval workflows: design a workflow, request approval on one or more documents, approve/reject, reassign, or cancel."},
+    {"name": "esignature", "description": "Send a document out for e-signature (DocuSign) and track its status."},
+    {"name": "esignature-public", "description": "The public DocuSign webhook callback."},
+    {"name": "retention", "description": "Retention policies and legal holds for compliance."},
+    {"name": "ai", "description": "AI-powered document intelligence: summarize, classify, extract, and chat with document content."},
+    {"name": "ai-agents", "description": "Create a scoped AI agent (chat / embed / demo) over a folder or file for a specific audience."},
+    {"name": "ai-agents-admin", "description": "Admin management of AI agents across the whole app."},
+    {"name": "ai-agents-public-page", "description": "The public-facing agent chat page and widget embed — no login required, gated by the agent's own unguessable public token."},
+    {"name": "webhooks", "description": "Subscribe an external URL (or Slack/Discord) to activity events."},
+    {"name": "activity", "description": "The audit log: every event recorded across the app, with summaries and alerting."},
+    {"name": "notifications", "description": "The in-app notification inbox."},
+    {"name": "users", "description": "Manage user accounts. Requires superadmin or the 'manage_users' feature."},
+    {"name": "groups", "description": "Manage groups, their feature grants, and membership — the core of C-ECM's access-control model."},
+    {"name": "saml", "description": "SAML single sign-on configuration and the SSO login flow itself."},
+    {"name": "admin", "description": "Server-wide settings: OAuth app credentials, AI backend configuration, SAML settings."},
+]
+
+app = FastAPI(
+    title="C-ECM API",
+    description=_API_DESCRIPTION,
+    version="1.0.0",
+    openapi_tags=_OPENAPI_TAGS,
+    lifespan=lifespan,
+)
 
 app.add_middleware(
     CORSMiddleware,

@@ -50,7 +50,7 @@ def test_ai_status_visible_to_a_viewer_not_just_admin(client, auth_headers):
 def _create_definition(client, auth_headers, conn_headers, name):
     return client.post("/workflows/definitions", headers=conn_headers, json={
         "name": name, "description": None,
-        "steps": [{"name": "Review", "reviewers": [], "required_approvals": 1}],
+        "steps": [{"name": "Review", "assignees": [], "required_approvals": 1}],
     }).json()
 
 

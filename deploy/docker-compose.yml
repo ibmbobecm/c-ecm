@@ -1,0 +1,72 @@
+# C-ECM standalone deployment — one command, runs anywhere Docker does:
+# a laptop, a bare Linux server, an AWS/Azure VM (see deploy/aws,
+# deploy/azure), or a Windows host via Docker Desktop/WSL2 (see
+# deploy/windows/ instead if you need real FileNet content-write support,
+# which this compose file does NOT provide — that path runs the backend
+# natively on Windows next to a real WebSphere install).
+#
+# Usage:
+#   cd deploy && cp .env.production.example .env   # then edit .env
+#   docker compose up -d --build
+#   docker compose logs -f backend
+#
+# All three services restart automatically on failure or host reboot
+# (restart: unless-stopped) and postgres_data/app_data are named volumes,
+# so `docker compose down` (without -v) never loses data — only
+# `docker compose down -v` does.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${FD_DB_NAME:-cecm}
+      POSTGRES_USER: ${FD_DB_USER:-cecm}
+      POSTGRES_PASSWORD: ${FD_DB_PASSWORD:?set FD_DB_PASSWORD in .env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FD_DB_USER:-cecm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/docker/backend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # Fixed to match the postgres service above — every other setting
+      # (secrets, OAuth, AI provider, ...) comes from .env, not hardcoded
+      # here, so this file never needs editing for a normal deployment.
+      FD_DB_ENGINE: postgres
+      FD_DB_HOST: postgres
+      FD_DB_PORT: 5432
+      FD_DB_NAME: ${FD_DB_NAME:-cecm}
+      FD_DB_USER: ${FD_DB_USER:-cecm}
+      FD_DATA_DIR: /app/data
+      FD_LOCAL_STORAGE_DIR: /app/data/local_storage
+    volumes:
+      # Everything C-ECM writes to disk itself (the Local Disk provider's
+      # own storage, the JWT/secrets-key files, uploaded AI Agent images) —
+      # NOT the app's control-plane database, which lives in postgres_data
+      # above once FD_DB_ENGINE=postgres.
+      - app_data:/app/data
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: deploy/docker/frontend.Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${HTTP_PORT:-80}:80"
+
+volumes:
+  postgres_data:
+  app_data:

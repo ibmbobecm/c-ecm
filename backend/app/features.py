@@ -36,6 +36,8 @@ FEATURES: list[Feature] = [
     Feature("manage_workflow_definitions", "Manage workflow definitions", "Create and delete approval workflow templates."),
     Feature("manage_resource_permissions", "Manage resource permissions",
             "Grant or revoke view/edit access to specific files and folders for other users or groups."),
+    Feature("manage_tags", "Manage tags",
+            "Permanently delete a shared tag definition — removes it from every resource on every connection."),
 ]
 
 FEATURE_KEYS: frozenset[str] = frozenset(f.key for f in FEATURES)

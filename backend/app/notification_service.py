@@ -25,6 +25,9 @@ _NOTIFIABLE_EVENT_TYPES = {
     "workflow_approved",
     "workflow_rejected",
     "workflow_cancelled",
+    "workflow_reassigned",
+    "workflow_document_added",
+    "workflow_document_removed",
     "legal_hold_set",
     "legal_hold_released",
 }
@@ -45,6 +48,9 @@ _MESSAGE_TEMPLATES = {
     "workflow_approved": '{actor}\'s approval completed the workflow for "{name}"',
     "workflow_rejected": '{actor} rejected "{name}"',
     "workflow_cancelled": '{actor} cancelled the approval request for "{name}"',
+    "workflow_reassigned": '{actor} reassigned a review step for "{name}"',
+    "workflow_document_added": '{actor} added a document to the approval for "{name}"',
+    "workflow_document_removed": '{actor} removed a document from the approval for "{name}"',
     "legal_hold_set": 'Legal hold placed on "{name}"',
     "legal_hold_released": 'Legal hold released on "{name}"',
 }
@@ -73,11 +79,14 @@ def on_event(event: dict) -> None:
         owners = []
     if not owners:
         owners = ["admin"]
-    for owner in owners:
-        try:
-            notifications_store.create(owner=owner, event_id=event["id"], message=message)
-        except Exception:
-            pass
+    try:
+        # One connection/commit for every recipient, not one per recipient —
+        # at N active users this was N sequential open+insert+commit+close
+        # cycles (each a serialized WAL-lock acquisition), running
+        # synchronously inside the request thread that triggered the event.
+        notifications_store.create_many(owners, event_id=event["id"], message=message)
+    except Exception:
+        pass
 
 
 def list_for_owner(owner: str, unread_only: bool = False, limit: int = 50) -> list[dict]:

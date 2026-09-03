@@ -72,7 +72,15 @@ def update_comment(comment_id: str, req: CommentUpdateRequest, session: CurrentS
         raise HTTPException(status_code=404, detail="Comment not found")
     access_control.require_resource_level(session, existing["resource_id"], existing["resource_type"], "view")
     actor = _actor(session)
+    is_superadmin = session.user.get("is_superadmin", False)
     if req.body is not None:
+        # Editing someone else's words is a different, more sensitive action
+        # than resolving a thread — restricted to the author (or a
+        # superadmin), unlike resolve/reopen just below, which stays a
+        # collaborative, view-level action (any reviewer should be able to
+        # mark a discussion resolved, not just whoever started it).
+        if existing["created_by"] != actor and not is_superadmin:
+            raise HTTPException(status_code=403, detail="Only the comment's author or a superadmin can edit its text")
         comments_store.edit(comment_id, req.body)
     if req.resolved is not None:
         comments_store.set_resolved(comment_id, req.resolved, actor if req.resolved else None)
@@ -84,4 +92,7 @@ def delete_comment(comment_id: str, session: CurrentSession = Depends(get_curren
     existing = comments_store.get(comment_id)
     if existing is not None:
         access_control.require_resource_level(session, existing["resource_id"], existing["resource_type"], "view")
+        is_superadmin = session.user.get("is_superadmin", False)
+        if existing["created_by"] != _actor(session) and not is_superadmin:
+            raise HTTPException(status_code=403, detail="Only the comment's author or a superadmin can delete it")
     comments_store.delete(comment_id)

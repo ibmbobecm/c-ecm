@@ -10,56 +10,44 @@ they go through activity_service.record_event().
 
 import datetime
 import json
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "events.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+events = sa.Table(
+    "events", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("connection_id", sa.String(32)),
+    sa.Column("provider_key", sa.String(64)),
+    sa.Column("resource_type", sa.String(64), nullable=False),
+    sa.Column("resource_id", sa.String(255), nullable=False),
+    sa.Column("resource_name", sa.Text),
+    sa.Column("event_type", sa.String(64), nullable=False),
+    sa.Column("actor", sa.String(255), nullable=False),
+    sa.Column("payload_json", sa.Text, nullable=False),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Index("idx_events_resource", "connection_id", "resource_id", "created_at"),
+    sa.Index("idx_events_created", "created_at"),
+    # Added for the admin audit/reporting page — filtering and
+    # aggregating by event_type and actor were previously unindexed
+    # full-table scans (list_events didn't even accept an `actor` filter
+    # at all until this page needed one).
+    sa.Index("idx_events_type", "event_type"),
+    sa.Index("idx_events_actor", "actor"),
+)
+
+_engine = db.get_engine("events")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS events (
-                id TEXT PRIMARY KEY,
-                connection_id TEXT,
-                provider_key TEXT,
-                resource_type TEXT NOT NULL,
-                resource_id TEXT NOT NULL,
-                resource_name TEXT,
-                event_type TEXT NOT NULL,
-                actor TEXT NOT NULL,
-                payload_json TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_resource ON events (connection_id, resource_id, created_at)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_created ON events (created_at)")
-        # Added for the admin audit/reporting page — filtering and
-        # aggregating by event_type and actor were previously unindexed
-        # full-table scans (list_events didn't even accept an `actor` filter
-        # at all until this page needed one).
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events (event_type)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_actor ON events (actor)")
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "events")
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row) -> dict:
     return {
         "id": row["id"],
         "connection_id": row["connection_id"],
@@ -87,28 +75,22 @@ def record_event(
 ) -> dict:
     event_id = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO events (id, connection_id, provider_key, resource_type, resource_id, resource_name, "
-            "event_type, actor, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                event_id,
-                connection_id,
-                provider_key,
-                resource_type,
-                resource_id,
-                resource_name,
-                event_type,
-                actor,
-                json.dumps(payload or {}),
-                now,
-            ),
+            events.insert().values(
+                id=event_id,
+                connection_id=connection_id,
+                provider_key=provider_key,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                resource_name=resource_name,
+                event_type=event_type,
+                actor=actor,
+                payload_json=json.dumps(payload or {}),
+                created_at=now,
+            )
         )
-        conn.commit()
-        row = conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(events).where(events.c.id == event_id)).mappings().first()
     return _row_to_dict(row)
 
 
@@ -121,32 +103,23 @@ def _build_where(
     actor: str | None,
     since: str | None,
     until: str | None,
-) -> tuple[str, list[str]]:
-    clauses: list[str] = []
-    params: list[str] = []
+) -> list:
+    clauses = []
     if connection_id is not None:
-        clauses.append("connection_id = ?")
-        params.append(connection_id)
+        clauses.append(events.c.connection_id == connection_id)
     if resource_id is not None:
-        clauses.append("resource_id = ?")
-        params.append(resource_id)
+        clauses.append(events.c.resource_id == resource_id)
     if event_type is not None:
-        clauses.append("event_type = ?")
-        params.append(event_type)
+        clauses.append(events.c.event_type == event_type)
     if event_types:
-        clauses.append(f"event_type IN ({','.join('?' * len(event_types))})")
-        params.extend(event_types)
+        clauses.append(events.c.event_type.in_(event_types))
     if actor is not None:
-        clauses.append("actor = ?")
-        params.append(actor)
+        clauses.append(events.c.actor == actor)
     if since is not None:
-        clauses.append("created_at >= ?")
-        params.append(since)
+        clauses.append(events.c.created_at >= since)
     if until is not None:
-        clauses.append("created_at <= ?")
-        params.append(until)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    return where, params
+        clauses.append(events.c.created_at <= until)
+    return clauses
 
 
 def list_events(
@@ -161,19 +134,20 @@ def list_events(
     limit: int = 50,
     offset: int = 0,
 ) -> list[dict]:
-    where, params = _build_where(
+    clauses = _build_where(
         connection_id=connection_id, resource_id=resource_id, event_type=event_type, event_types=event_types,
         actor=actor, since=since, until=until,
     )
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            f"SELECT * FROM events {where} ORDER BY created_at DESC LIMIT ? OFFSET ?",
-            (*params, min(limit, 500), max(offset, 0)),
-        ).fetchall()
-        return [_row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = (
+        sa.select(events)
+        .where(*clauses)
+        .order_by(events.c.created_at.desc())
+        .limit(min(limit, 500))
+        .offset(max(offset, 0))
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row_to_dict(r) for r in rows]
 
 
 def count_events(
@@ -186,16 +160,13 @@ def count_events(
     since: str | None = None,
     until: str | None = None,
 ) -> int:
-    where, params = _build_where(
+    clauses = _build_where(
         connection_id=connection_id, resource_id=resource_id, event_type=event_type, event_types=event_types,
         actor=actor, since=since, until=until,
     )
-    conn = _conn()
-    try:
-        row = conn.execute(f"SELECT COUNT(*) AS n FROM events {where}", params).fetchone()
-        return row["n"]
-    finally:
-        conn.close()
+    stmt = sa.select(sa.func.count()).select_from(events).where(*clauses)
+    with _engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
 
 
 def aggregate_by_type(
@@ -206,18 +177,21 @@ def aggregate_by_type(
     event_types: list[str] | None = None,
 ) -> list[dict]:
     """[{event_type, count}], for the "breakdown by event type" pie chart."""
-    where, params = _build_where(
+    clauses = _build_where(
         connection_id=None, resource_id=None, event_type=None, event_types=event_types,
         actor=actor, since=since, until=until,
     )
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            f"SELECT event_type, COUNT(*) AS count FROM events {where} GROUP BY event_type ORDER BY count DESC", params
-        ).fetchall()
-        return [{"event_type": r["event_type"], "count": r["count"]} for r in rows]
-    finally:
-        conn.close()
+    count_col = sa.func.count().label("count")
+    stmt = (
+        sa.select(events.c.event_type, count_col)
+        .select_from(events)
+        .where(*clauses)
+        .group_by(events.c.event_type)
+        .order_by(count_col.desc())
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [{"event_type": r["event_type"], "count": r["count"]} for r in rows]
 
 
 def count_distinct_actors(
@@ -231,16 +205,13 @@ def count_distinct_actors(
     unlike aggregate_by_actor below, whose "most active users" ranking
     deliberately ignores the actor filter so it keeps comparing everyone,
     not just whoever the table happens to be filtered to."""
-    where, params = _build_where(
+    clauses = _build_where(
         connection_id=None, resource_id=None, event_type=None, event_types=event_types,
         actor=actor, since=since, until=until,
     )
-    conn = _conn()
-    try:
-        row = conn.execute(f"SELECT COUNT(DISTINCT actor) AS n FROM events {where}", params).fetchone()
-        return row["n"]
-    finally:
-        conn.close()
+    stmt = sa.select(sa.func.count(sa.func.distinct(events.c.actor))).select_from(events).where(*clauses)
+    with _engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
 
 
 def aggregate_by_actor(
@@ -251,19 +222,22 @@ def aggregate_by_actor(
     limit: int = 20,
 ) -> list[dict]:
     """[{actor, count}] ordered by activity volume, for "most active users"."""
-    where, params = _build_where(
+    clauses = _build_where(
         connection_id=None, resource_id=None, event_type=None, event_types=event_types,
         actor=None, since=since, until=until,
     )
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            f"SELECT actor, COUNT(*) AS count FROM events {where} GROUP BY actor ORDER BY count DESC LIMIT ?",
-            (*params, limit),
-        ).fetchall()
-        return [{"actor": r["actor"], "count": r["count"]} for r in rows]
-    finally:
-        conn.close()
+    count_col = sa.func.count().label("count")
+    stmt = (
+        sa.select(events.c.actor, count_col)
+        .select_from(events)
+        .where(*clauses)
+        .group_by(events.c.actor)
+        .order_by(count_col.desc())
+        .limit(limit)
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [{"actor": r["actor"], "count": r["count"]} for r in rows]
 
 
 def aggregate_by_day(
@@ -276,26 +250,38 @@ def aggregate_by_day(
     """[{day, count}] (day = "YYYY-MM-DD", UTC) for the events-over-time bar
     chart. created_at is stored as an ISO-8601 string, so a plain substring
     slice is enough to bucket by day without needing SQLite's date functions."""
-    where, params = _build_where(
+    clauses = _build_where(
         connection_id=None, resource_id=None, event_type=None, event_types=event_types,
         actor=actor, since=since, until=until,
     )
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            f"SELECT substr(created_at, 1, 10) AS day, COUNT(*) AS count FROM events {where} "
-            "GROUP BY day ORDER BY day ASC",
-            params,
-        ).fetchall()
-        return [{"day": r["day"], "count": r["count"]} for r in rows]
-    finally:
-        conn.close()
+    # substr(string, start, length) is the one function signature SQLite,
+    # PostgreSQL, and Oracle all accept, so this stays func.substr rather
+    # than needing a dialect-specific date-truncation function.
+    day_col = sa.func.substr(events.c.created_at, 1, 10).label("day")
+    count_col = sa.func.count().label("count")
+    stmt = (
+        sa.select(day_col, count_col)
+        .select_from(events)
+        .where(*clauses)
+        .group_by(day_col)
+        .order_by(day_col.asc())
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [{"day": r["day"], "count": r["count"]} for r in rows]
 
 
 def list_distinct_actors() -> list[str]:
-    conn = _conn()
-    try:
-        rows = conn.execute("SELECT DISTINCT actor FROM events ORDER BY actor COLLATE NOCASE").fetchall()
-        return [r["actor"] for r in rows]
-    finally:
-        conn.close()
+    # COLLATE NOCASE has no portable equivalent across sqlite/postgres/oracle
+    # dialects here (postgres/oracle default collations are case-sensitive,
+    # and neither exposes a bare "NOCASE" collation name) — func.lower()
+    # gives the same case-insensitive ordering portably on all three.
+    stmt = (
+        sa.select(events.c.actor)
+        .distinct()
+        .select_from(events)
+        .order_by(sa.func.lower(events.c.actor))
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [r["actor"] for r in rows]

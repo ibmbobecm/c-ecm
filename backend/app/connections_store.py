@@ -1,25 +1,42 @@
 """Persistent storage for backend connections — a user connects FileNet,
 Alfresco, Google Drive, etc. once (via Settings), and it's remembered across
 logins, not just cached for one session's lifetime like the old per-login
-model was. Plaintext SQLite locally, same as this app's other credential
-handling; flagged for a real secrets vault later, not addressed now.
+model was. creds_json is encrypted at rest (crypto_util.py) — the SQLite
+file itself never holds a plaintext username/password/OAuth token.
 """
 
 import datetime
 import json
-import sqlite3
 import uuid
 
-from .config import CONNECTIONS_DB_PATH, DATA_DIR
+import sqlalchemy as sa
+from sqlalchemy.engine import Connection
 
+from . import crypto_util
+from . import db
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(CONNECTIONS_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+_metadata = sa.MetaData()
+
+connections = sa.Table(
+    "connections", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("provider_key", sa.String(64), nullable=False),
+    sa.Column("display_name", sa.String(255), nullable=False),
+    sa.Column("creds_json", sa.Text, nullable=False),
+    sa.Column("identity", sa.String(255)),
+    sa.Column("created_at", sa.String(40), nullable=False),
+)
+
+# COLLATE NOCASE (SQLite-only syntax) has no portable equivalent across
+# sqlite/postgres/oracle, so case-insensitive uniqueness is expressed instead
+# as a functional unique index on lower(display_name) — a standard construct
+# all three dialects support. Deliberately NOT created as part of a single
+# db.create_all() pass — see init_db() below for why.
+idx_connections_name_nocase = sa.Index(
+    "idx_connections_name_nocase", sa.func.lower(connections.c.display_name), unique=True
+)
+
+_engine = db.get_engine("connections")
 
 
 class DuplicateConnectionNameError(Exception):
@@ -33,12 +50,12 @@ class DuplicateConnectionNameError(Exception):
         super().__init__(f"A connection named \"{display_name}\" already exists")
 
 
-def _dedupe_existing_names(conn: sqlite3.Connection) -> None:
+def _dedupe_existing_names(conn: Connection) -> None:
     """One-time migration: rows created before this uniqueness rule existed
     may already share a display_name. Keep the older row's name as-is and
     disambiguate any later same-named row, so the UNIQUE index below can
     actually be created on the data that's already there."""
-    rows = conn.execute("SELECT id, display_name FROM connections ORDER BY created_at").fetchall()
+    rows = conn.execute(sa.select(connections).order_by(connections.c.created_at)).mappings().all()
     seen_lower: set[str] = set()
     for row in rows:
         name = row["display_name"]
@@ -50,48 +67,59 @@ def _dedupe_existing_names(conn: sqlite3.Connection) -> None:
         while f"{name} ({n})".lower() in seen_lower:
             n += 1
         new_name = f"{name} ({n})"
-        conn.execute("UPDATE connections SET display_name = ? WHERE id = ?", (new_name, row["id"]))
+        conn.execute(connections.update().where(connections.c.id == row["id"]).values(display_name=new_name))
         seen_lower.add(new_name.lower())
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS connections (
-                id TEXT PRIMARY KEY,
-                provider_key TEXT NOT NULL,
-                display_name TEXT NOT NULL,
-                creds_json TEXT NOT NULL,
-                identity TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
+    with _engine.begin() as conn:
+        # Table first (idempotent — SQLAlchemy's reflection-based checkfirst,
+        # not a raw "IF NOT EXISTS" which Oracle doesn't support anyway).
+        if not sa.inspect(conn).has_table("connections"):
+            conn.execute(sa.schema.CreateTable(connections))
+        # Then dedupe whatever's already there...
         _dedupe_existing_names(conn)
-        # A unique index (not an inline column constraint) so this applies
-        # cleanly to a table that already existed before this check did.
-        # COLLATE NOCASE so "IBM FileNet" and "ibm filenet" still collide —
-        # they'd be indistinguishable in the connection switcher otherwise.
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_connections_name_nocase "
-            "ON connections (display_name COLLATE NOCASE)"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+        # ...and only then add the uniqueness index — safe now that any
+        # pre-existing case-collisions are gone. This has to stay a separate,
+        # ordered step rather than a single db.create_all(_metadata, ...)
+        # call: create_all() would create the table and the index in the
+        # same pass, so on a database that predates this uniqueness rule
+        # (and may already hold two rows differing only in case) the index
+        # creation would fail outright before _dedupe_existing_names ever ran.
+        #
+        # Whether the index already exists (e.g. a prior startup already
+        # created it) can't be reliably checked via reflection on every
+        # dialect — SQLite in particular can't reflect an expression-based
+        # index back into get_indexes() (it silently skips it with a
+        # SAWarning) — so just attempt the create and treat "already exists"
+        # as success. A SAVEPOINT (begin_nested) keeps a failed attempt here
+        # from poisoning the rest of this transaction, since the dedupe and
+        # legacy-creds-encryption migrations below still need to commit.
+        try:
+            with conn.begin_nested():
+                conn.execute(sa.schema.CreateIndex(idx_connections_name_nocase))
+        except sa.exc.DBAPIError:
+            pass
+        _encrypt_legacy_creds(conn)
+
+
+def _encrypt_legacy_creds(conn: Connection) -> None:
+    """One-time migration: encrypts any creds_json row still holding plain
+    JSON from before encryption-at-rest existed. crypto_util.ensure_encrypted
+    is idempotent, so this is safe to run on every startup — an
+    already-encrypted row is read back unchanged and skipped."""
+    rows = conn.execute(sa.select(connections.c.id, connections.c.creds_json)).mappings().all()
+    for row in rows:
+        upgraded = crypto_util.ensure_encrypted(row["creds_json"])
+        if upgraded != row["creds_json"]:
+            conn.execute(connections.update().where(connections.c.id == row["id"]).values(creds_json=upgraded))
 
 
 def name_exists(display_name: str) -> bool:
-    conn = _conn()
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM connections WHERE display_name = ? COLLATE NOCASE", (display_name,)
-        ).fetchone()
-        return row is not None
-    finally:
-        conn.close()
+    stmt = sa.select(sa.literal(1)).where(sa.func.lower(connections.c.display_name) == display_name.lower())
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).first()
+    return row is not None
 
 
 def unique_display_name(base: str) -> str:
@@ -107,7 +135,7 @@ def unique_display_name(base: str) -> str:
     return f"{base} ({n})"
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row) -> dict:
     return {
         "id": row["id"],
         "provider_key": row["provider_key"],
@@ -118,67 +146,58 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def list_connections() -> list[dict]:
-    conn = _conn()
-    try:
-        rows = conn.execute("SELECT * FROM connections ORDER BY created_at").fetchall()
-        return [_row_to_dict(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = sa.select(connections).order_by(connections.c.created_at)
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row_to_dict(r) for r in rows]
 
 
 def get_connection(connection_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
-        return _row_to_dict(row) if row else None
-    finally:
-        conn.close()
+    stmt = sa.select(connections).where(connections.c.id == connection_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return _row_to_dict(row) if row else None
 
 
 def get_creds(connection_id: str) -> tuple[str, dict] | None:
     """Returns (provider_key, creds) or None."""
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM connections WHERE id = ?", (connection_id,)).fetchone()
-        if row is None:
-            return None
-        return row["provider_key"], json.loads(row["creds_json"])
-    finally:
-        conn.close()
+    stmt = sa.select(connections).where(connections.c.id == connection_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    if row is None:
+        return None
+    return row["provider_key"], json.loads(crypto_util.decrypt(row["creds_json"]))
 
 
 def create_connection(provider_key: str, display_name: str, creds: dict, identity: str) -> dict:
     conn_id = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
     try:
-        try:
+        with _engine.begin() as conn:
             conn.execute(
-                "INSERT INTO connections (id, provider_key, display_name, creds_json, identity, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?)",
-                (conn_id, provider_key, display_name, json.dumps(creds), identity, now),
+                connections.insert().values(
+                    id=conn_id,
+                    provider_key=provider_key,
+                    display_name=display_name,
+                    creds_json=crypto_util.encrypt(json.dumps(creds)),
+                    identity=identity,
+                    created_at=now,
+                )
             )
-        except sqlite3.IntegrityError:
-            raise DuplicateConnectionNameError(display_name)
-        conn.commit()
-    finally:
-        conn.close()
+    except sa.exc.IntegrityError:
+        raise DuplicateConnectionNameError(display_name)
     return get_connection(conn_id)
 
 
 def update_creds(connection_id: str, creds: dict) -> None:
-    conn = _conn()
-    try:
-        conn.execute("UPDATE connections SET creds_json = ? WHERE id = ?", (json.dumps(creds), connection_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            connections.update()
+            .where(connections.c.id == connection_id)
+            .values(creds_json=crypto_util.encrypt(json.dumps(creds)))
+        )
 
 
 def delete_connection(connection_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM connections WHERE id = ?", (connection_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(connections.delete().where(connections.c.id == connection_id))

@@ -2,7 +2,7 @@ import concurrent.futures
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import access_control, connections_store, saved_searches_store
+from .. import access_control, connections_store, resource_permissions_store, saved_searches_store
 from ..access_helpers import to_http
 from ..auth import CurrentSession, CurrentUser, get_current_user, get_current_session
 from ..schemas import (
@@ -23,11 +23,23 @@ router = APIRouter(prefix="/search", tags=["search"])
 def _filter_by_access(session: CurrentSession, folders, files):
     # Post-query filtering, not a query constraint — results the caller
     # can't view are simply omitted rather than the whole search failing.
-    # effective_level's own connection_has_any_grants() fast-path means
-    # this costs nothing extra for the common case where nothing on the
-    # connection is restricted.
-    folders = [f for f in folders if access_control.effective_level(session, f.id, "folder") != "none"]
-    files = [f for f in files if access_control.effective_level(session, f.id, "file") != "none"]
+    # connection_has_any_grants() doesn't depend on the resource, so it's
+    # checked once per request here and threaded through instead of each
+    # effective_level() call re-opening its own connection to re-learn the
+    # same answer once per result — with a broad search matching dozens of
+    # results this was the dominant per-request cost under concurrent load.
+    has_grants = (
+        not session.user.get("is_superadmin")
+        and resource_permissions_store.connection_has_any_grants(session.connection_id)
+    )
+    folders = [
+        f for f in folders
+        if access_control.effective_level(session, f.id, "folder", _connection_has_grants=has_grants) != "none"
+    ]
+    files = [
+        f for f in files
+        if access_control.effective_level(session, f.id, "file", _connection_has_grants=has_grants) != "none"
+    ]
     return folders, files
 
 
@@ -177,7 +189,10 @@ def create_saved_search(req: SavedSearchCreateRequest, user: CurrentUser = Depen
 
 
 @router.delete("/saved/{search_id}", status_code=204)
-def delete_saved_search(search_id: str, _user: CurrentUser = Depends(get_current_user)):
+def delete_saved_search(search_id: str, user: CurrentUser = Depends(get_current_user)):
+    existing = saved_searches_store.get(search_id)
+    if existing is not None and existing["owner"] != user["username"] and not user.get("is_superadmin", False):
+        raise HTTPException(status_code=403, detail="Only the owner or a superadmin can delete this saved search")
     saved_searches_store.delete(search_id)
 
 

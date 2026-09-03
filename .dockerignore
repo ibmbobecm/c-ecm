@@ -1,0 +1,16 @@
+# Keeps local, host-specific, or huge directories out of every Docker build
+# context (deploy/docker/*.Dockerfile and deploy/windows/*.Dockerfile all
+# build with the repo root as context). Most load-bearing entry here is
+# node_modules: without it, `COPY frontend/ ./` in frontend.Dockerfile would
+# copy a locally-installed node_modules (built for the host's OS/arch, not
+# the container's) over the fresh `npm ci` the Dockerfile just ran.
+**/node_modules
+**/__pycache__
+**/*.pyc
+.git
+backend/.venv
+backend/.venv-prod
+backend/data
+frontend/dist
+deploy/.env
+deploy/aws/.state

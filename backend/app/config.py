@@ -8,6 +8,32 @@ BACKEND_DIR = Path(__file__).resolve().parent.parent
 load_dotenv(BACKEND_DIR / ".env")
 DATA_DIR = Path(os.environ.get("FD_DATA_DIR", str(BACKEND_DIR / "data")))
 
+# --- App database engine -----------------------------------------------
+# This is C-ECM's OWN control-plane data (users, groups, workflows, tags,
+# comments, metadata, permissions, settings, notifications, events,
+# webhooks, saved searches, locks, retention, e-signature requests, AI
+# agents) — not the 54 content-storage PROVIDERS a connection points at
+# (FileNet, Google Drive, Local Disk, ...), which stay exactly as they are
+# regardless of this setting. "local" here means the SQLite files those
+# providers keep for their own bookkeeping (e.g. local disk's per-
+# connection file index) are a provider implementation detail, untouched
+# by FD_DB_ENGINE.
+#
+# "sqlite" (default): zero-config, one file per store under DATA_DIR,
+#   unchanged from every earlier version of this app.
+# "postgres" / "oracle": every store's tables live in one shared database.
+#   Set FD_DB_URL to a full SQLAlchemy URL, or leave it blank and set the
+#   FD_DB_HOST/PORT/NAME/USER/PASSWORD components below instead — either
+#   way, every store creates its own tables/indexes there automatically
+#   the first time it starts against an empty database (see db.py).
+FD_DB_ENGINE = os.environ.get("FD_DB_ENGINE", "sqlite").lower()
+FD_DB_URL = os.environ.get("FD_DB_URL", "")
+FD_DB_HOST = os.environ.get("FD_DB_HOST", "")
+FD_DB_PORT = os.environ.get("FD_DB_PORT", "")
+FD_DB_NAME = os.environ.get("FD_DB_NAME", "cecm")
+FD_DB_USER = os.environ.get("FD_DB_USER", "")
+FD_DB_PASSWORD = os.environ.get("FD_DB_PASSWORD", "")
+
 
 def _get_or_create_secret() -> str:
     secret_path = DATA_DIR / ".jwt_secret"
@@ -152,3 +178,20 @@ WATSON_NLU_APIKEY = os.environ.get("WATSON_NLU_APIKEY", "")
 WATSON_DISCO_URL = os.environ.get("WATSON_DISCO_URL", "")
 WATSON_DISCO_APIKEY = os.environ.get("WATSON_DISCO_APIKEY", "")
 WATSON_DISCO_PROJECT_ID = os.environ.get("WATSON_DISCO_PROJECT_ID", "")
+
+# Anthropic (Claude) — same "one app-level credential, admin-settable at
+# runtime" shape as watsonx above.
+FD_ANTHROPIC_API_KEY = os.environ.get("FD_ANTHROPIC_API_KEY", "")
+FD_ANTHROPIC_MODEL = os.environ.get("FD_ANTHROPIC_MODEL", "claude-sonnet-5")
+
+# Generic OpenAI-compatible backend — also how real OpenAI/ChatGPT is used,
+# by pointing FD_AI_BASE_URL at the default (api.openai.com) with an OpenAI
+# API key; any other OpenAI-compatible endpoint (Azure OpenAI, a local
+# proxy, etc.) works the same way by overriding FD_AI_BASE_URL/FD_AI_MODEL.
+FD_AI_API_KEY = os.environ.get("FD_AI_API_KEY", "")
+FD_AI_BASE_URL = os.environ.get("FD_AI_BASE_URL", "https://api.openai.com/v1")
+FD_AI_MODEL = os.environ.get("FD_AI_MODEL", "gpt-4o-mini")
+
+# Local Ollama — no API key; just a reachable URL and a pulled model name.
+FD_OLLAMA_URL = os.environ.get("FD_OLLAMA_URL", "http://localhost:11434")
+FD_OLLAMA_MODEL = os.environ.get("FD_OLLAMA_MODEL", "llama3")

@@ -5,45 +5,33 @@ StorageProvider.search() call; this module only persists the definition.
 
 import datetime
 import json
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "saved_searches.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+saved_searches = sa.Table(
+    "saved_searches", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("owner", sa.String(255), nullable=False),
+    sa.Column("name", sa.String(255), nullable=False),
+    sa.Column("connection_id", sa.String(32)),
+    sa.Column("query_json", sa.Text, nullable=False),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Column("last_run_at", sa.String(40)),
+)
+
+_engine = db.get_engine("saved_searches")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS saved_searches (
-                id TEXT PRIMARY KEY,
-                owner TEXT NOT NULL,
-                name TEXT NOT NULL,
-                connection_id TEXT,
-                query_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                last_run_at TEXT
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "saved_searches")
 
 
-def _row(row: sqlite3.Row) -> dict:
+def _row(row: sa.Row) -> dict:
     return {
         "id": row["id"],
         "owner": row["owner"],
@@ -58,56 +46,46 @@ def _row(row: sqlite3.Row) -> dict:
 def create(owner: str, name: str, connection_id: str | None, query: dict) -> dict:
     sid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO saved_searches (id, owner, name, connection_id, query_json, created_at, last_run_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, NULL)",
-            (sid, owner, name, connection_id, json.dumps(query), now),
+            saved_searches.insert().values(
+                id=sid, owner=owner, name=name, connection_id=connection_id,
+                query_json=json.dumps(query), created_at=now, last_run_at=None,
+            )
         )
-        conn.commit()
-        row = conn.execute("SELECT * FROM saved_searches WHERE id = ?", (sid,)).fetchone()
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(saved_searches).where(saved_searches.c.id == sid)).mappings().first()
     return _row(row)
 
 
 def list_for_owner(owner: str) -> list[dict]:
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM saved_searches WHERE owner = ? ORDER BY created_at DESC", (owner,)
-        ).fetchall()
-        return [_row(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = (
+        sa.select(saved_searches)
+        .where(saved_searches.c.owner == owner)
+        .order_by(saved_searches.c.created_at.desc())
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def get(search_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM saved_searches WHERE id = ?", (search_id,)).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+    with _engine.connect() as conn:
+        row = conn.execute(
+            sa.select(saved_searches).where(saved_searches.c.id == search_id)
+        ).mappings().first()
+    return _row(row) if row else None
 
 
 def touch_last_run(search_id: str) -> None:
-    conn = _conn()
-    try:
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with _engine.begin() as conn:
         conn.execute(
-            "UPDATE saved_searches SET last_run_at = ? WHERE id = ?",
-            (datetime.datetime.now(datetime.timezone.utc).isoformat(), search_id),
+            saved_searches.update()
+            .where(saved_searches.c.id == search_id)
+            .values(last_run_at=now)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def delete(search_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM saved_searches WHERE id = ?", (search_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(saved_searches.delete().where(saved_searches.c.id == search_id))

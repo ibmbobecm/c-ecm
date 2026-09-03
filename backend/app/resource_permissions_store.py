@@ -16,61 +16,43 @@ common case where nobody has restricted anything.
 """
 
 import datetime
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "resource_permissions.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+resource_permissions = sa.Table(
+    "resource_permissions", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("connection_id", sa.String(32), nullable=False),
+    sa.Column("resource_id", sa.String(255), nullable=False),
+    sa.Column("resource_type", sa.String(64), nullable=False),
+    sa.Column("principal_type", sa.String(64), nullable=False),
+    sa.Column("principal_id", sa.String(32), nullable=False),
+    sa.Column("level", sa.String(64), nullable=False),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Column("created_by", sa.String(255)),
+    sa.Index("idx_resource_permissions_lookup", "connection_id", "resource_id"),
+    # Backs connection_has_any_grants()'s SELECT EXISTS — a plain
+    # index on connection_id alone (the lookup index above is
+    # (connection_id, resource_id), still usable, but a narrower
+    # single-column index makes the "does this connection have ANY
+    # row at all" check as cheap as possible, since it's the one
+    # query every gated route pays on every request).
+    sa.Index("idx_resource_permissions_connection", "connection_id"),
+)
+
+_engine = db.get_engine("resource_permissions")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS resource_permissions (
-                id TEXT PRIMARY KEY,
-                connection_id TEXT NOT NULL,
-                resource_id TEXT NOT NULL,
-                resource_type TEXT NOT NULL,
-                principal_type TEXT NOT NULL,
-                principal_id TEXT NOT NULL,
-                level TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                created_by TEXT
-            )
-            """
-        )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_resource_permissions_lookup "
-            "ON resource_permissions (connection_id, resource_id)"
-        )
-        # Backs connection_has_any_grants()'s SELECT EXISTS — a plain
-        # index on connection_id alone (the lookup index above is
-        # (connection_id, resource_id), still usable, but a narrower
-        # single-column index makes the "does this connection have ANY
-        # row at all" check as cheap as possible, since it's the one
-        # query every gated route pays on every request).
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_resource_permissions_connection "
-            "ON resource_permissions (connection_id)"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "resource_permissions")
 
 
-def _row(row: sqlite3.Row) -> dict:
+def _row(row) -> dict:
     return {
         "id": row["id"],
         "connection_id": row["connection_id"],
@@ -85,29 +67,25 @@ def _row(row: sqlite3.Row) -> dict:
 
 
 def connection_has_any_grants(connection_id: str) -> bool:
-    conn = _conn()
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM resource_permissions WHERE connection_id = ? LIMIT 1", (connection_id,)
-        ).fetchone()
+    stmt = sa.select(sa.literal(1)).select_from(resource_permissions).where(
+        resource_permissions.c.connection_id == connection_id
+    ).limit(1)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).first()
         return row is not None
-    finally:
-        conn.close()
 
 
 def list_for_resource(connection_id: str, resource_id: str) -> list[dict]:
     """Grants set directly on this resource (not inherited from an
     ancestor) — what the access-grants UI for this specific resource
     shows/edits."""
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM resource_permissions WHERE connection_id = ? AND resource_id = ? ORDER BY created_at",
-            (connection_id, resource_id),
-        ).fetchall()
+    stmt = sa.select(resource_permissions).where(
+        resource_permissions.c.connection_id == connection_id,
+        resource_permissions.c.resource_id == resource_id,
+    ).order_by(resource_permissions.c.created_at)
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
         return [_row(r) for r in rows]
-    finally:
-        conn.close()
 
 
 def grants_for_resource_batch(connection_id: str, resource_ids: list[str]) -> dict[str, list[dict]]:
@@ -116,76 +94,79 @@ def grants_for_resource_batch(connection_id: str, resource_ids: list[str]) -> di
     {resource_id: [grant, ...]} only for ids that actually have grants."""
     if not resource_ids:
         return {}
-    conn = _conn()
-    try:
-        placeholders = ",".join("?" * len(resource_ids))
-        rows = conn.execute(
-            f"SELECT * FROM resource_permissions WHERE connection_id = ? AND resource_id IN ({placeholders})",
-            (connection_id, *resource_ids),
-        ).fetchall()
-        out: dict[str, list[dict]] = {}
-        for r in rows:
-            out.setdefault(r["resource_id"], []).append(_row(r))
-        return out
-    finally:
-        conn.close()
+    stmt = sa.select(resource_permissions).where(
+        resource_permissions.c.connection_id == connection_id,
+        resource_permissions.c.resource_id.in_(resource_ids),
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    out: dict[str, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["resource_id"], []).append(_row(r))
+    return out
 
 
 def create(connection_id: str, resource_id: str, resource_type: str, principal_type: str,
            principal_id: str, level: str, created_by: str | None) -> dict:
     grant_id = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO resource_permissions (id, connection_id, resource_id, resource_type, principal_type, "
-            "principal_id, level, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (grant_id, connection_id, resource_id, resource_type, principal_type, principal_id, level, now, created_by),
+            resource_permissions.insert().values(
+                id=grant_id, connection_id=connection_id, resource_id=resource_id, resource_type=resource_type,
+                principal_type=principal_type, principal_id=principal_id, level=level, created_at=now,
+                created_by=created_by,
+            )
         )
-        conn.commit()
-        row = conn.execute("SELECT * FROM resource_permissions WHERE id = ?", (grant_id,)).fetchone()
+        row = conn.execute(
+            sa.select(resource_permissions).where(resource_permissions.c.id == grant_id)
+        ).mappings().first()
         return _row(row)
-    finally:
-        conn.close()
 
 
 def get(grant_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM resource_permissions WHERE id = ?", (grant_id,)).fetchone()
+    stmt = sa.select(resource_permissions).where(resource_permissions.c.id == grant_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
         return _row(row) if row else None
-    finally:
-        conn.close()
 
 
 def delete(grant_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM resource_permissions WHERE id = ?", (grant_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(resource_permissions.delete().where(resource_permissions.c.id == grant_id))
 
 
 def delete_for_resource(connection_id: str, resource_id: str) -> None:
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "DELETE FROM resource_permissions WHERE connection_id = ? AND resource_id = ?",
-            (connection_id, resource_id),
+            resource_permissions.delete().where(
+                resource_permissions.c.connection_id == connection_id,
+                resource_permissions.c.resource_id == resource_id,
+            )
         )
-        conn.commit()
-    finally:
-        conn.close()
+
+
+def delete_for_resources_batch(connection_id: str, resource_ids: list[str]) -> None:
+    """Same cleanup as delete_for_resource(), for many resources in one
+    connection/commit — used when permanently deleting a folder with
+    descendants, which previously called delete_for_resource() once per
+    descendant (each opening its own connection)."""
+    if not resource_ids:
+        return
+    with _engine.begin() as conn:
+        conn.execute(
+            resource_permissions.delete().where(
+                resource_permissions.c.connection_id == connection_id,
+                resource_permissions.c.resource_id.in_(resource_ids),
+            )
+        )
 
 
 def delete_for_connection(connection_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM resource_permissions WHERE connection_id = ?", (connection_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            resource_permissions.delete().where(resource_permissions.c.connection_id == connection_id)
+        )
 
 
 def delete_for_group(group_id: str) -> None:
@@ -193,11 +174,10 @@ def delete_for_group(group_id: str) -> None:
     silently become permanent open-ended holes — see groups_store.py's
     delete_group; wired in from routers/groups.py, not groups_store.py
     itself, to keep that module from needing to know about this one."""
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "DELETE FROM resource_permissions WHERE principal_type = 'group' AND principal_id = ?", (group_id,)
+            resource_permissions.delete().where(
+                resource_permissions.c.principal_type == "group",
+                resource_permissions.c.principal_id == group_id,
+            )
         )
-        conn.commit()
-    finally:
-        conn.close()

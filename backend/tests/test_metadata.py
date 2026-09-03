@@ -66,7 +66,7 @@ def test_viewer_cannot_manage_document_classes(client: TestClient, auth_headers)
     # dependency but never actually applied it to these three routes).
     client.post("/users", headers=auth_headers, json={
         "username": "viewer_metadata_test", "password": "viewpass123",
-        "display_name": "Viewer", "roles": ["viewer"],
+        "display_name": "Viewer", "is_superadmin": False,
     })
     login = client.post("/auth/login", json={"username": "viewer_metadata_test", "password": "viewpass123"})
     viewer_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
@@ -91,6 +91,69 @@ def test_viewer_cannot_manage_document_classes(client: TestClient, auth_headers)
         for u in users:
             if u["username"] == "viewer_metadata_test":
                 client.delete(f"/users/{u['id']}", headers=auth_headers)
+
+
+def test_resource_metadata_values_validated_against_class_schema(client: TestClient, conn_headers, uploaded_file):
+    # Previously ResourceMetadataSetRequest.values was an open dict[str, Any]
+    # with no cross-check against the assigned class's field definitions —
+    # a required field could be omitted, a number field could hold a
+    # string, and a select field could hold a value outside its declared
+    # options, all silently accepted. This exercises the fix.
+    fid = uploaded_file["id"]
+    cls = client.post("/metadata/classes", headers=conn_headers, json={
+        "name": "Invoice", "description": None,
+        "fields": [
+            {"key": "vendor", "label": "Vendor", "type": "text", "required": True, "options": []},
+            {"key": "amount", "label": "Amount", "type": "number", "required": False, "options": []},
+            {"key": "status", "label": "Status", "type": "select", "required": False, "options": ["Draft", "Final"]},
+        ],
+    }).json()
+    cls_id = cls["id"]
+    try:
+        # Missing a required field.
+        missing_required = client.put(f"/metadata/resource/{fid}", headers=conn_headers, json={
+            "resource_type": "file", "class_id": cls_id, "values": {"amount": 100},
+        })
+        assert missing_required.status_code == 422
+
+        # Wrong type for a number field.
+        wrong_type = client.put(f"/metadata/resource/{fid}", headers=conn_headers, json={
+            "resource_type": "file", "class_id": cls_id, "values": {"vendor": "Acme", "amount": "not-a-number"},
+        })
+        assert wrong_type.status_code == 422
+
+        # Select value outside the declared options.
+        bad_option = client.put(f"/metadata/resource/{fid}", headers=conn_headers, json={
+            "resource_type": "file", "class_id": cls_id,
+            "values": {"vendor": "Acme", "status": "Nonexistent"},
+        })
+        assert bad_option.status_code == 422
+
+        # A fully valid payload still succeeds.
+        ok = client.put(f"/metadata/resource/{fid}", headers=conn_headers, json={
+            "resource_type": "file", "class_id": cls_id,
+            "values": {"vendor": "Acme", "amount": 100, "status": "Final"},
+        })
+        assert ok.status_code == 200, ok.text
+    finally:
+        client.delete(f"/metadata/classes/{cls_id}", headers=conn_headers)
+
+
+def test_document_class_field_type_and_duplicate_keys_rejected(client: TestClient, auth_headers):
+    bad_type = client.post("/metadata/classes", headers=auth_headers, json={
+        "name": "BadType", "description": None,
+        "fields": [{"key": "x", "label": "X", "type": "not-a-real-type", "required": False, "options": []}],
+    })
+    assert bad_type.status_code == 422
+
+    dup_keys = client.post("/metadata/classes", headers=auth_headers, json={
+        "name": "DupKeys", "description": None,
+        "fields": [
+            {"key": "x", "label": "X", "type": "text", "required": False, "options": []},
+            {"key": "x", "label": "X again", "type": "text", "required": False, "options": []},
+        ],
+    })
+    assert dup_keys.status_code == 422
 
 
 def test_metadata_cleaned_on_permanent_delete(client: TestClient, conn_headers, uploaded_file):

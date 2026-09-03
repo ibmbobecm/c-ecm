@@ -8,6 +8,7 @@ export type User = {
   created_at: string;
   last_login_at: string | null;
   groups: string[]; // group names this user belongs to, for display
+  group_ids: string[]; // same groups, by id -- for matching a group-type workflow assignee
   features: string[]; // flattened feature set from all their groups
 };
 
@@ -115,6 +116,15 @@ export type AdminSettings = {
   docusign_webhook_hmac_key_set: boolean;
   docusign_configured: boolean;
   ai_backend: string;
+  anthropic_api_key_set: boolean;
+  anthropic_model: string;
+  anthropic_configured: boolean;
+  ai_api_key_set: boolean;
+  ai_base_url: string;
+  ai_model: string;
+  ai_openai_configured: boolean;
+  ollama_url: string;
+  ollama_model: string;
   ibm_cloud_api_key_set: boolean;
   watsonx_project_id: string;
   watsonx_url: string;
@@ -367,7 +377,7 @@ export type ResourceMetadataHistoryEntry = {
 export type Webhook = {
   id: string;
   url: string;
-  secret: string | null;
+  secret_set: boolean;
   destination_type: "custom" | "slack" | "discord";
   event_types: string[];
   active: boolean;
@@ -382,9 +392,14 @@ export type Webhook = {
 
 // --- workflows -------------------------------------------------------------
 
+export type AssigneeRef = {
+  type: "user" | "group";
+  id: string; // username for type="user", group id for type="group"
+};
+
 export type WorkflowStepDef = {
   name: string;
-  reviewers: string[];
+  assignees: AssigneeRef[]; // empty = any authenticated user
   required_approvals: number;
 };
 
@@ -406,15 +421,23 @@ export type WorkflowStepAction = {
   acted_at: string;
 };
 
+export type WorkflowInstanceResource = {
+  id: string;
+  resource_id: string;
+  resource_type: "file" | "folder";
+  resource_name: string | null;
+  added_at: string;
+  added_by: string;
+};
+
 export type WorkflowInstance = {
   id: string;
   definition_id: string;
   connection_id: string;
-  resource_id: string;
-  resource_type: string;
-  resource_name: string | null;
+  resources: WorkflowInstanceResource[];
   status: "in_review" | "approved" | "rejected" | "cancelled";
   current_step: number;
+  steps: WorkflowStepDef[]; // this instance's own snapshot -- reflects reassignment, not the shared definition
   requested_by: string;
   comment: string | null;
   created_at: string;

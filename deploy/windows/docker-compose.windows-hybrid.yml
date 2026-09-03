@@ -1,0 +1,45 @@
+# Windows-native hybrid deployment: postgres + nginx run in (Linux)
+# containers via Docker Desktop/WSL2, exactly like the standalone stack —
+# but the backend itself is deliberately NOT containerized here. It runs
+# natively on the Windows host instead (see install-native-backend.ps1),
+# because real FileNet content-write support needs a direct subprocess
+# call to a local WebSphere Java install, which a container can't easily
+# reach. Run this from deploy/windows/, not deploy/.
+#
+# Usage (from an elevated PowerShell, Docker Desktop running):
+#   docker compose -f docker-compose.windows-hybrid.yml up -d --build
+#   .\install-native-backend.ps1     # sets up and starts the backend service
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${FD_DB_NAME:-cecm}
+      POSTGRES_USER: ${FD_DB_USER:-cecm}
+      POSTGRES_PASSWORD: ${FD_DB_PASSWORD:?set FD_DB_PASSWORD in ..\.env}
+    ports:
+      # Exposed to the host (unlike the standalone stack's internal-only
+      # postgres) so the natively-running backend can reach it.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${FD_DB_USER:-cecm}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  nginx:
+    build:
+      context: ../..
+      dockerfile: deploy/windows/frontend.windows-hybrid.Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    extra_hosts:
+      # Docker Desktop on Windows already resolves this out of the box in
+      # most versions, but pinning it explicitly avoids relying on that.
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  postgres_data:

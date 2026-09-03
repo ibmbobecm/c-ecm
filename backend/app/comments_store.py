@@ -6,55 +6,40 @@ activity log by the router, not this module — this is pure storage.
 
 import datetime
 import json
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "comments.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    # Unset (0) by default — a writer that can't get the lock immediately
-    # would raise "database is locked" instantly instead of waiting a
-    # moment for the current writer to finish, which starts happening in
-    # practice once more than a couple of requests write concurrently.
-    conn.execute("PRAGMA busy_timeout=5000")
-    return conn
+comments = sa.Table(
+    "comments", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("connection_id", sa.String(32), nullable=False),
+    sa.Column("resource_id", sa.String(255), nullable=False),
+    sa.Column("resource_type", sa.String(64), nullable=False),
+    sa.Column("parent_comment_id", sa.String(32)),
+    sa.Column("body", sa.Text, nullable=False),
+    sa.Column("mentioned_users_json", sa.Text, nullable=False, server_default="[]"),
+    sa.Column("resolved_at", sa.String(40)),
+    sa.Column("resolved_by", sa.String(255)),
+    sa.Column("created_by", sa.String(255), nullable=False),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Column("edited_at", sa.String(40)),
+    sa.Index("idx_comments_resource", "connection_id", "resource_id", "created_at"),
+)
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS comments (
-                id TEXT PRIMARY KEY,
-                connection_id TEXT NOT NULL,
-                resource_id TEXT NOT NULL,
-                resource_type TEXT NOT NULL,
-                parent_comment_id TEXT,
-                body TEXT NOT NULL,
-                mentioned_users_json TEXT NOT NULL DEFAULT '[]',
-                resolved_at TEXT,
-                resolved_by TEXT,
-                created_by TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                edited_at TEXT
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_comments_resource ON comments (connection_id, resource_id, created_at)")
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "comments")
 
 
-def _row(row: sqlite3.Row) -> dict:
+_engine = db.get_engine("comments")
+
+
+def _row(row) -> dict:
     return {
         "id": row["id"],
         "connection_id": row["connection_id"],
@@ -82,17 +67,21 @@ def create(
 ) -> dict:
     cid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO comments (id, connection_id, resource_id, resource_type, parent_comment_id, body, "
-            "mentioned_users_json, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (cid, connection_id, resource_id, resource_type, parent_comment_id, body, json.dumps(mentioned_users or []), created_by, now),
+            comments.insert().values(
+                id=cid,
+                connection_id=connection_id,
+                resource_id=resource_id,
+                resource_type=resource_type,
+                parent_comment_id=parent_comment_id,
+                body=body,
+                mentioned_users_json=json.dumps(mentioned_users or []),
+                created_by=created_by,
+                created_at=now,
+            )
         )
-        conn.commit()
-        row = conn.execute("SELECT * FROM comments WHERE id = ?", (cid,)).fetchone()
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(comments).where(comments.c.id == cid)).mappings().first()
     return _row(row)
 
 
@@ -101,92 +90,92 @@ def count_for_resources(connection_id: str, resource_ids: list[str]) -> dict[str
     tags_store.get_tags_for_resources — avoids one query per visible item."""
     if not resource_ids:
         return {}
-    conn = _conn()
-    try:
-        placeholders = ",".join("?" * len(resource_ids))
-        rows = conn.execute(
-            f"SELECT resource_id, COUNT(*) AS c FROM comments WHERE connection_id = ? AND resource_id IN ({placeholders}) "
-            f"GROUP BY resource_id",
-            (connection_id, *resource_ids),
-        ).fetchall()
-        counts = {rid: 0 for rid in resource_ids}
-        for row in rows:
-            counts[row["resource_id"]] = row["c"]
-        return counts
-    finally:
-        conn.close()
+    stmt = (
+        sa.select(comments.c.resource_id, sa.func.count().label("c"))
+        .where(comments.c.connection_id == connection_id, comments.c.resource_id.in_(resource_ids))
+        .group_by(comments.c.resource_id)
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    counts = {rid: 0 for rid in resource_ids}
+    for row in rows:
+        counts[row["resource_id"]] = row["c"]
+    return counts
 
 
 def list_for_resource(connection_id: str, resource_id: str) -> list[dict]:
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM comments WHERE connection_id = ? AND resource_id = ? ORDER BY created_at ASC",
-            (connection_id, resource_id),
-        ).fetchall()
-        return [_row(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = (
+        sa.select(comments)
+        .where(comments.c.connection_id == connection_id, comments.c.resource_id == resource_id)
+        .order_by(comments.c.created_at.asc())
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def get(comment_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM comments WHERE id = ?", (comment_id,)).fetchone()
-        return _row(row) if row else None
-    finally:
-        conn.close()
+    with _engine.connect() as conn:
+        row = conn.execute(sa.select(comments).where(comments.c.id == comment_id)).mappings().first()
+    return _row(row) if row else None
 
 
 def edit(comment_id: str, body: str) -> None:
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "UPDATE comments SET body = ?, edited_at = ? WHERE id = ?",
-            (body, datetime.datetime.now(datetime.timezone.utc).isoformat(), comment_id),
+            comments.update()
+            .where(comments.c.id == comment_id)
+            .values(body=body, edited_at=datetime.datetime.now(datetime.timezone.utc).isoformat())
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def set_resolved(comment_id: str, resolved: bool, resolved_by: str | None) -> None:
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         if resolved:
             conn.execute(
-                "UPDATE comments SET resolved_at = ?, resolved_by = ? WHERE id = ?",
-                (datetime.datetime.now(datetime.timezone.utc).isoformat(), resolved_by, comment_id),
+                comments.update()
+                .where(comments.c.id == comment_id)
+                .values(resolved_at=datetime.datetime.now(datetime.timezone.utc).isoformat(), resolved_by=resolved_by)
             )
         else:
-            conn.execute("UPDATE comments SET resolved_at = NULL, resolved_by = NULL WHERE id = ?", (comment_id,))
-        conn.commit()
-    finally:
-        conn.close()
+            conn.execute(
+                comments.update()
+                .where(comments.c.id == comment_id)
+                .values(resolved_at=None, resolved_by=None)
+            )
 
 
 def delete(comment_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM comments WHERE id = ? OR parent_comment_id = ?", (comment_id, comment_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            comments.delete().where(
+                sa.or_(comments.c.id == comment_id, comments.c.parent_comment_id == comment_id)
+            )
+        )
 
 
 def delete_for_resource(connection_id: str, resource_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM comments WHERE connection_id = ? AND resource_id = ?", (connection_id, resource_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            comments.delete().where(comments.c.connection_id == connection_id, comments.c.resource_id == resource_id)
+        )
+
+
+def delete_for_resources_batch(connection_id: str, resource_ids: list[str]) -> None:
+    """Same cleanup as delete_for_resource(), for many resources in one
+    connection/commit — used when permanently deleting a folder with
+    descendants, which previously called delete_for_resource() once per
+    descendant (each opening its own connection)."""
+    if not resource_ids:
+        return
+    with _engine.begin() as conn:
+        conn.execute(
+            comments.delete().where(
+                comments.c.connection_id == connection_id, comments.c.resource_id.in_(resource_ids)
+            )
+        )
 
 
 def delete_for_connection(connection_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM comments WHERE connection_id = ?", (connection_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(comments.delete().where(comments.c.connection_id == connection_id))

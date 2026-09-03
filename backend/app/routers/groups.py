@@ -5,7 +5,7 @@ editor's checkboxes are built from (see features.py)."""
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import groups_store, resource_permissions_store, users_store
+from .. import groups_store, resource_permissions_store, users_store, workflows_store
 from ..auth import require_feature
 from ..features import FEATURES, FEATURE_KEYS
 from ..schemas import FeatureOut, GroupCreateRequest, GroupOut, GroupUpdateRequest, UserOut
@@ -59,6 +59,7 @@ def update_group(group_id: str, req: GroupUpdateRequest, _admin=Depends(_manage_
 def delete_group(group_id: str, _admin=Depends(_manage_groups)):
     groups_store.delete_group(group_id)
     resource_permissions_store.delete_for_group(group_id)
+    workflows_store.delete_for_group(group_id)
 
 
 @router.post("/groups/{group_id}/members/{user_id}", response_model=GroupOut)

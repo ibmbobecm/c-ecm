@@ -28,6 +28,36 @@ def _actor(session: CurrentSession) -> str:
     return session.user.get("username") or session.creds.get("username") or "unknown"
 
 
+def _validate_metadata_values(cls: dict, values: dict) -> None:
+    """Checks `values` against `cls`'s field definitions before they're
+    stored — previously this was a UI-only convention (a dict[str, Any]
+    was accepted as-is at the API layer), so a required field could be
+    left blank, a number/boolean field could hold any type, and a select
+    field could hold a value outside its declared options, all without
+    the backend ever noticing. Raises on the first problem found."""
+    for field in cls["fields"]:
+        key, label = field["key"], field["label"]
+        present = key in values and values[key] not in (None, "")
+        if field.get("required") and not present:
+            raise HTTPException(status_code=422, detail=f'"{label}" is required')
+        if not present:
+            continue
+        value = values[key]
+        ftype = field.get("type", "text")
+        if ftype == "number":
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                raise HTTPException(status_code=422, detail=f'"{label}" must be a number')
+        elif ftype == "boolean":
+            if not isinstance(value, bool):
+                raise HTTPException(status_code=422, detail=f'"{label}" must be true or false')
+        elif ftype == "select":
+            options = field.get("options") or []
+            if options and value not in options:
+                raise HTTPException(status_code=422, detail=f'"{label}" must be one of: {", ".join(options)}')
+        elif ftype == "date" and not isinstance(value, str):
+            raise HTTPException(status_code=422, detail=f'"{label}" must be a date string')
+
+
 # ---------- document classes -----------------------------------------------
 
 @router.get("/document-classes", response_model=list[DocumentClassOut])
@@ -78,6 +108,11 @@ def get_resource_metadata(resource_id: str, resource_type: str = "file", session
 def set_resource_metadata(resource_id: str, req: ResourceMetadataSetRequest,
                            session: CurrentSession = Depends(get_current_session)):
     access_control.require_resource_level(session, resource_id, req.resource_type, "edit")
+    if req.class_id:
+        cls = metadata_store.get_class(req.class_id)
+        if cls is None:
+            raise HTTPException(status_code=404, detail="Document class not found")
+        _validate_metadata_values(cls, req.values)
     actor = _actor(session)
     m = metadata_store.set_metadata(
         session.connection_id, resource_id, req.resource_type, req.class_id, req.values, actor=actor
@@ -85,10 +120,11 @@ def set_resource_metadata(resource_id: str, req: ResourceMetadataSetRequest,
     out = ResourceMetadataOut(**m)
     if req.resource_type == "folder" and req.apply_to_children:
         descendants = collect_descendants(session, resource_id)
-        for d in descendants:
-            metadata_store.set_metadata(
-                session.connection_id, d["resource_id"], d["resource_type"], req.class_id, req.values, actor=actor
-            )
+        metadata_store.set_metadata_batch(
+            session.connection_id,
+            [(d["resource_id"], d["resource_type"]) for d in descendants],
+            req.class_id, req.values, actor=actor,
+        )
         out.applied_to_count = len(descendants)
     return out
 

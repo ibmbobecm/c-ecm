@@ -28,6 +28,7 @@ def build_user_out(user: dict) -> UserOut:
         email=user.get("email"), is_superadmin=user["is_superadmin"], is_active=user["is_active"],
         created_at=user["created_at"], last_login_at=user.get("last_login_at"),
         groups=[g["name"] for g in groups],
+        group_ids=[g["id"] for g in groups],
         features=groups_store.user_features(user["id"]),
     )
 

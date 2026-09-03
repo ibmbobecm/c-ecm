@@ -4,50 +4,38 @@ events_store.py is kept separate from activity_service.py's Observer layer.
 """
 
 import datetime
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "notifications.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+notifications = sa.Table(
+    "notifications", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("owner", sa.String(255), nullable=False),
+    sa.Column("event_id", sa.String(32)),
+    sa.Column("message", sa.Text, nullable=False),
+    sa.Column("read_at", sa.String(40)),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Index("idx_notifications_owner", "owner", "created_at"),
+)
+
+_engine = db.get_engine("notifications")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS notifications (
-                id TEXT PRIMARY KEY,
-                owner TEXT NOT NULL,
-                event_id TEXT,
-                message TEXT NOT NULL,
-                read_at TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_notifications_owner ON notifications (owner, created_at)")
-        # A per-rule notification-preferences table (mute this event type,
-        # mute this connection, ...) belongs here later — deliberately not
-        # built yet: notification_service.py's hardcoded _NOTIFIABLE_EVENT_TYPES
-        # is today's whole policy, so a rules table with no reader or writer
-        # anywhere would just be dead schema.
-        conn.commit()
-    finally:
-        conn.close()
+    # A per-rule notification-preferences table (mute this event type,
+    # mute this connection, ...) belongs here later — deliberately not
+    # built yet: notification_service.py's hardcoded _NOTIFIABLE_EVENT_TYPES
+    # is today's whole policy, so a rules table with no reader or writer
+    # anywhere would just be dead schema.
+    db.create_all(_metadata, "notifications")
 
 
-def _row(row: sqlite3.Row) -> dict:
+def _row(row) -> dict:
     return {
         "id": row["id"],
         "owner": row["owner"],
@@ -61,62 +49,69 @@ def _row(row: sqlite3.Row) -> dict:
 def create(owner: str, event_id: str | None, message: str) -> dict:
     nid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO notifications (id, owner, event_id, message, read_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)",
-            (nid, owner, event_id, message, now),
+            notifications.insert().values(
+                id=nid, owner=owner, event_id=event_id, message=message, read_at=None, created_at=now
+            )
         )
-        conn.commit()
-        row = conn.execute("SELECT * FROM notifications WHERE id = ?", (nid,)).fetchone()
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(notifications).where(notifications.c.id == nid)).mappings().first()
     return _row(row)
 
 
+def create_many(owners: list[str], event_id: str | None, message: str) -> None:
+    """Same insert as create(), fanned out to many owners in one connection
+    and one commit instead of N — for broadcast-style writes (e.g.
+    notification_service's per-active-user fan-out) where opening/committing/
+    closing a fresh connection per recipient dominates the cost under
+    concurrency (each cycle is a separate WAL-lock acquisition serialized
+    against every other writer on this same file).
+    """
+    if not owners:
+        return
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    rows = [
+        {"id": uuid.uuid4().hex, "owner": owner, "event_id": event_id, "message": message,
+         "read_at": None, "created_at": now}
+        for owner in owners
+    ]
+    with _engine.begin() as conn:
+        conn.execute(notifications.insert(), rows)
+
+
 def list_for_owner(owner: str, unread_only: bool = False, limit: int = 50) -> list[dict]:
-    conn = _conn()
-    try:
-        clause = "AND read_at IS NULL" if unread_only else ""
-        rows = conn.execute(
-            f"SELECT * FROM notifications WHERE owner = ? {clause} ORDER BY created_at DESC LIMIT ?",
-            (owner, min(limit, 200)),
-        ).fetchall()
-        return [_row(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = sa.select(notifications).where(notifications.c.owner == owner)
+    if unread_only:
+        stmt = stmt.where(notifications.c.read_at.is_(None))
+    stmt = stmt.order_by(notifications.c.created_at.desc()).limit(min(limit, 200))
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_row(r) for r in rows]
 
 
 def unread_count(owner: str) -> int:
-    conn = _conn()
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS c FROM notifications WHERE owner = ? AND read_at IS NULL", (owner,)
-        ).fetchone()
-        return row["c"]
-    finally:
-        conn.close()
+    stmt = sa.select(sa.func.count()).select_from(notifications).where(
+        notifications.c.owner == owner, notifications.c.read_at.is_(None)
+    )
+    with _engine.connect() as conn:
+        return conn.execute(stmt).scalar_one()
 
 
 def mark_read(notification_id: str) -> None:
-    conn = _conn()
-    try:
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with _engine.begin() as conn:
         conn.execute(
-            "UPDATE notifications SET read_at = ? WHERE id = ? AND read_at IS NULL",
-            (datetime.datetime.now(datetime.timezone.utc).isoformat(), notification_id),
+            notifications.update()
+            .where(notifications.c.id == notification_id, notifications.c.read_at.is_(None))
+            .values(read_at=now)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def mark_all_read(owner: str) -> None:
-    conn = _conn()
-    try:
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    with _engine.begin() as conn:
         conn.execute(
-            "UPDATE notifications SET read_at = ? WHERE owner = ? AND read_at IS NULL",
-            (datetime.datetime.now(datetime.timezone.utc).isoformat(), owner),
+            notifications.update()
+            .where(notifications.c.owner == owner, notifications.c.read_at.is_(None))
+            .values(read_at=now)
         )
-        conn.commit()
-    finally:
-        conn.close()

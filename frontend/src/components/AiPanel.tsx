@@ -1,8 +1,10 @@
 /**
  * AiPanel — AI document intelligence sidebar panel.
  * Shows a summary of the current file, allows Q&A, displays
- * suggested metadata values, and provides AI-powered workflow routing
- * (IBM watsonx / Watson NLU / Watson Discovery aware).
+ * suggested metadata values, and provides AI-powered workflow routing.
+ * Backend-aware: the small badge next to each section header reflects
+ * whichever AI provider is active (Admin Settings → AI Provider), not just
+ * IBM Watson.
  */
 import { useState } from "react";
 import { apiPost } from "../api/client";
@@ -17,33 +19,35 @@ type AiSuggestWorkflowOut = {
   confidence: "high" | "medium" | "low";
 };
 
-// Single source of truth for Watson-family backend display names — used to
-// live as two independent conditionals (isWatson's startsWith check here,
-// plus a separate startsWith("watson") check for Q&A placeholder copy
-// further down) that had to be kept in sync by hand; a future backend like
-// "watson_assistant" would satisfy the old startsWith check but silently
-// fall through this same ternary's default to the wrong label.
-const WATSON_LABELS: Record<string, string> = {
-  watsonx: "watsonx.ai",
-  watson_nlu: "Watson NLU",
-  watson_disco: "Watson Discovery",
+// Single source of truth for backend display names/branding — used to live
+// as two independent conditionals (a startsWith("watson") check here, plus
+// a separate one for Q&A placeholder copy further down) that had to be kept
+// in sync by hand; a future backend name that satisfied one startsWith
+// check could silently fall through the other to the wrong label.
+const BACKEND_BADGES: Record<string, { label: string; poweredBy: string; bg: string; color: string }> = {
+  anthropic: { label: "Claude", poweredBy: "Anthropic Claude", bg: "#d97757", color: "#fff" },
+  openai: { label: "ChatGPT", poweredBy: "OpenAI", bg: "#10a37f", color: "#fff" },
+  ollama: { label: "Ollama", poweredBy: "a local Ollama model", bg: "#374151", color: "#fff" },
+  watsonx: { label: "IBM Watson", poweredBy: "IBM watsonx.ai", bg: "#0f62fe", color: "#fff" },
+  watson_nlu: { label: "IBM Watson", poweredBy: "Watson NLU", bg: "#0f62fe", color: "#fff" },
+  watson_disco: { label: "IBM Watson", poweredBy: "Watson Discovery", bg: "#0f62fe", color: "#fff" },
 };
 
-/** Tiny IBM Watson badge — shown when a Watson backend is active */
-function WatsonBadge({ backend }: { backend: string }) {
-  const label = WATSON_LABELS[backend];
-  if (!label) return null;
+/** Tiny badge naming whichever AI provider is currently active */
+function BackendBadge({ backend }: { backend: string }) {
+  const info = BACKEND_BADGES[backend];
+  if (!info) return null;
   return (
     <span
-      title={`Powered by IBM ${label}`}
+      title={`Powered by ${info.poweredBy}`}
       style={{
         display: "inline-flex",
         alignItems: "center",
         gap: 3,
         padding: "2px 6px",
         borderRadius: 4,
-        background: "#0f62fe",
-        color: "#fff",
+        background: info.bg,
+        color: info.color,
         fontSize: 10,
         fontWeight: 700,
         letterSpacing: "0.03em",
@@ -51,7 +55,7 @@ function WatsonBadge({ backend }: { backend: string }) {
         verticalAlign: "middle",
       }}
     >
-      IBM Watson
+      {info.label}
     </span>
   );
 }
@@ -165,7 +169,7 @@ export function AiPanel({ file, aiBackend }: { file: FileItem; aiBackend?: strin
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>
             <Icon name="star" size={14} /> AI Summary
-            <WatsonBadge backend={backend} />
+            <BackendBadge backend={backend} />
           </span>
           {!summary && (
             <button className="link-btn" onClick={loadSummary} disabled={summaryLoading}>
@@ -190,7 +194,7 @@ export function AiPanel({ file, aiBackend }: { file: FileItem; aiBackend?: strin
       <div className="ai-panel-section">
         <span style={{ fontWeight: 600, fontSize: "var(--text-sm)", display: "block", marginBottom: 8 }}>
           <Icon name="search" size={14} /> Ask about this document
-          <WatsonBadge backend={backend} />
+          <BackendBadge backend={backend} />
         </span>
         <div style={{ display: "flex", gap: 6 }}>
           <input
@@ -238,7 +242,7 @@ export function AiPanel({ file, aiBackend }: { file: FileItem; aiBackend?: strin
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
           <span style={{ fontWeight: 600, fontSize: "var(--text-sm)" }}>
             <Icon name="workflow" size={14} /> Workflow Suggestion
-            <WatsonBadge backend={backend} />
+            <BackendBadge backend={backend} />
           </span>
           <button className="link-btn" onClick={suggestWorkflow} disabled={wfLoading}>
             {wfLoading ? "Analysing…" : "Suggest"}

@@ -4,250 +4,238 @@ Groups and inherits the union of every group's features. Superadmin users
 bypass this entirely (see auth.require_feature) — groups only matter for
 everyone else.
 
-Same store shape/conventions as users_store.py: its own SQLite file, WAL
-mode, plain dict rows. `user_groups.user_id` has no real foreign key since
-users live in a separate SQLite file (users.db) — same cross-store
-reference-by-id pattern already used by tags_store/comments_store on
-resource_id.
+Same store shape/conventions as users_store.py: its own configurable engine
+(see db.py — one SQLite file in sqlite mode, a shared database in postgres/
+oracle mode), plain dict rows. `user_groups.user_id` has no real foreign key
+since users live in a separate store (users_store.py — its own SQLite file
+in sqlite mode) — same cross-store reference-by-id pattern already used by
+tags_store/comments_store on resource_id.
 """
 
 import datetime
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "groups.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+groups = sa.Table(
+    "groups", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    # COLLATE NOCASE (SQLite-only syntax) has no portable equivalent across
+    # sqlite/postgres/oracle, so the UNIQUE constraint below is plain
+    # (case-sensitive at the DB layer) on every backend now, not just on
+    # postgres/oracle — the closest safe substitute. Case-insensitive
+    # uniqueness is still enforced the same way it always effectively was
+    # from the application's perspective: every create/update path checks
+    # name_exists() (which compares via func.lower() below, portable across
+    # all three dialects) before writing.
+    sa.Column("name", sa.String(255), nullable=False, unique=True),
+    sa.Column("description", sa.Text),
+    sa.Column("created_at", sa.String(40), nullable=False),
+)
+
+group_features = sa.Table(
+    "group_features", _metadata,
+    sa.Column("group_id", sa.String(32), sa.ForeignKey("groups.id", ondelete="CASCADE"),
+              primary_key=True, nullable=False),
+    sa.Column("feature_key", sa.String(64), primary_key=True, nullable=False),
+)
+
+user_groups = sa.Table(
+    "user_groups", _metadata,
+    sa.Column("user_id", sa.String(32), primary_key=True, nullable=False),
+    sa.Column("group_id", sa.String(32), sa.ForeignKey("groups.id", ondelete="CASCADE"),
+              primary_key=True, nullable=False),
+)
+
+_engine = db.get_engine("groups")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS groups (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                description TEXT,
-                created_at TEXT NOT NULL
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS group_features (
-                group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-                feature_key TEXT NOT NULL,
-                PRIMARY KEY (group_id, feature_key)
-            )
-            """
-        )
-        conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_groups (
-                user_id TEXT NOT NULL,
-                group_id TEXT NOT NULL REFERENCES groups(id) ON DELETE CASCADE,
-                PRIMARY KEY (user_id, group_id)
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "groups")
 
 
-def _group_row(row: sqlite3.Row) -> dict:
+def _group_row(row) -> dict:
     return {"id": row["id"], "name": row["name"], "description": row["description"], "created_at": row["created_at"]}
 
 
-def _group_out(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+def _group_out(conn, row) -> dict:
     g = _group_row(row)
-    g["feature_keys"] = [
-        r["feature_key"] for r in conn.execute(
-            "SELECT feature_key FROM group_features WHERE group_id = ? ORDER BY feature_key", (g["id"],)
-        ).fetchall()
-    ]
+    feat_rows = conn.execute(
+        sa.select(group_features.c.feature_key)
+        .where(group_features.c.group_id == g["id"])
+        .order_by(group_features.c.feature_key)
+    ).mappings().all()
+    g["feature_keys"] = [r["feature_key"] for r in feat_rows]
     g["member_count"] = conn.execute(
-        "SELECT COUNT(*) AS c FROM user_groups WHERE group_id = ?", (g["id"],)
-    ).fetchone()["c"]
+        sa.select(sa.func.count()).select_from(user_groups).where(user_groups.c.group_id == g["id"])
+    ).scalar_one()
     return g
 
 
 def list_groups() -> list[dict]:
-    conn = _conn()
-    try:
-        rows = conn.execute("SELECT * FROM groups ORDER BY name COLLATE NOCASE").fetchall()
+    with _engine.connect() as conn:
+        rows = conn.execute(sa.select(groups).order_by(sa.func.lower(groups.c.name))).mappings().all()
         return [_group_out(conn, r) for r in rows]
-    finally:
-        conn.close()
 
 
 def get_group(group_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+    with _engine.connect() as conn:
+        row = conn.execute(sa.select(groups).where(groups.c.id == group_id)).mappings().first()
         return _group_out(conn, row) if row else None
-    finally:
-        conn.close()
 
 
 def name_exists(name: str, exclude_id: str | None = None) -> bool:
-    conn = _conn()
-    try:
+    with _engine.connect() as conn:
         row = conn.execute(
-            "SELECT id FROM groups WHERE name = ? COLLATE NOCASE AND id != ?", (name, exclude_id or "")
-        ).fetchone()
+            sa.select(groups.c.id).where(
+                sa.func.lower(groups.c.name) == sa.func.lower(name),
+                groups.c.id != (exclude_id or ""),
+            )
+        ).mappings().first()
         return row is not None
-    finally:
-        conn.close()
 
 
 def create_group(name: str, description: str | None, feature_keys: list[str]) -> dict:
     gid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO groups (id, name, description, created_at) VALUES (?, ?, ?, ?)",
-            (gid, name, description, now),
+            groups.insert().values(id=gid, name=name, description=description, created_at=now)
         )
-        conn.executemany(
-            "INSERT OR IGNORE INTO group_features (group_id, feature_key) VALUES (?, ?)",
-            [(gid, k) for k in feature_keys],
-        )
-        conn.commit()
-        row = conn.execute("SELECT * FROM groups WHERE id = ?", (gid,)).fetchone()
+        if feature_keys:
+            # dict.fromkeys(...) dedupes while preserving order — the original
+            # relied on SQLite's "INSERT OR IGNORE" to silently drop duplicate
+            # (group_id, feature_key) pairs from the incoming list; that
+            # syntax is SQLite-only, and since gid is freshly minted above
+            # (no existing group_features rows can collide with it yet), a
+            # plain dedupe-then-insert here reaches the exact same end state
+            # on every backend.
+            rows = [{"group_id": gid, "feature_key": k} for k in dict.fromkeys(feature_keys)]
+            conn.execute(group_features.insert(), rows)
+        row = conn.execute(sa.select(groups).where(groups.c.id == gid)).mappings().first()
         return _group_out(conn, row)
-    finally:
-        conn.close()
 
 
 def update_group(group_id: str, *, name: str | None = None, description: str | None = None,
                   feature_keys: list[str] | None = None) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+    with _engine.begin() as conn:
+        row = conn.execute(sa.select(groups).where(groups.c.id == group_id)).mappings().first()
         if row is None:
             return None
-        updates: list[tuple[str, object]] = []
+        updates: dict = {}
         if name is not None:
-            updates.append(("name", name))
+            updates["name"] = name
         if description is not None:
-            updates.append(("description", description))
+            updates["description"] = description
         if updates:
-            set_clause = ", ".join(f"{col} = ?" for col, _ in updates)
-            values = [v for _, v in updates]
-            conn.execute(f"UPDATE groups SET {set_clause} WHERE id = ?", (*values, group_id))
+            conn.execute(groups.update().where(groups.c.id == group_id).values(**updates))
         if feature_keys is not None:
-            conn.execute("DELETE FROM group_features WHERE group_id = ?", (group_id,))
-            conn.executemany(
-                "INSERT OR IGNORE INTO group_features (group_id, feature_key) VALUES (?, ?)",
-                [(group_id, k) for k in feature_keys],
-            )
-        conn.commit()
-        row = conn.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
+            conn.execute(group_features.delete().where(group_features.c.group_id == group_id))
+            if feature_keys:
+                # Same dedupe reasoning as create_group() — the DELETE just
+                # above guarantees no pre-existing (group_id, feature_key)
+                # rows to collide with, so a duplicate can only come from the
+                # incoming feature_keys list itself.
+                rows = [{"group_id": group_id, "feature_key": k} for k in dict.fromkeys(feature_keys)]
+                conn.execute(group_features.insert(), rows)
+        row = conn.execute(sa.select(groups).where(groups.c.id == group_id)).mappings().first()
         return _group_out(conn, row)
-    finally:
-        conn.close()
 
 
 def delete_group(group_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM groups WHERE id = ?", (group_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        # Both group_features.group_id and user_groups.group_id declare
+        # ON DELETE CASCADE above for a real RDBMS's own referential-
+        # integrity story (postgres/oracle always enforce FKs), but db.py's
+        # sqlite engine never issues "PRAGMA foreign_keys=ON" the way the old
+        # per-call _conn() used to — so under sqlite this cascade would
+        # silently not fire if left to the DB alone, orphaning membership/
+        # feature rows. Deleting the child rows explicitly here (cheap,
+        # already-indexed-by-PK deletes) makes group deletion complete on
+        # every backend regardless of that pragma difference.
+        conn.execute(group_features.delete().where(group_features.c.group_id == group_id))
+        conn.execute(user_groups.delete().where(user_groups.c.group_id == group_id))
+        conn.execute(groups.delete().where(groups.c.id == group_id))
 
 
 def add_user_to_group(user_id: str, group_id: str) -> None:
-    conn = _conn()
     try:
-        conn.execute("INSERT OR IGNORE INTO user_groups (user_id, group_id) VALUES (?, ?)", (user_id, group_id))
-        conn.commit()
-    finally:
-        conn.close()
+        with _engine.begin() as conn:
+            conn.execute(user_groups.insert().values(user_id=user_id, group_id=group_id))
+    except sa.exc.IntegrityError:
+        # Same idempotency the original's "INSERT OR IGNORE" gave: calling
+        # this when the user is already a member of the group is a silent
+        # no-op, not an error (callers — e.g. routers/saml.py's default-group
+        # assignment — rely on that). "OR IGNORE" is SQLite-only syntax with
+        # no single portable equivalent across postgres/oracle in the plain
+        # SQLAlchemy Core expression API, so catching the (user_id, group_id)
+        # primary-key violation is the portable substitute.
+        pass
 
 
 def remove_user_from_group(user_id: str, group_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM user_groups WHERE user_id = ? AND group_id = ?", (user_id, group_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            user_groups.delete().where(user_groups.c.user_id == user_id, user_groups.c.group_id == group_id)
+        )
 
 
 def list_group_members(group_id: str) -> list[str]:
     """Returns member user ids — callers join against users_store for details."""
-    conn = _conn()
-    try:
-        rows = conn.execute("SELECT user_id FROM user_groups WHERE group_id = ?", (group_id,)).fetchall()
+    with _engine.connect() as conn:
+        rows = conn.execute(
+            sa.select(user_groups.c.user_id).where(user_groups.c.group_id == group_id)
+        ).mappings().all()
         return [r["user_id"] for r in rows]
-    finally:
-        conn.close()
 
 
 def list_user_groups(user_id: str) -> list[dict]:
     """Returns [{id, name}] for every group this user belongs to."""
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT g.id, g.name FROM groups g JOIN user_groups ug ON ug.group_id = g.id "
-            "WHERE ug.user_id = ? ORDER BY g.name COLLATE NOCASE",
-            (user_id,),
-        ).fetchall()
+    stmt = (
+        sa.select(groups.c.id, groups.c.name)
+        .select_from(groups.join(user_groups, user_groups.c.group_id == groups.c.id))
+        .where(user_groups.c.user_id == user_id)
+        .order_by(sa.func.lower(groups.c.name))
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
         return [{"id": r["id"], "name": r["name"]} for r in rows]
-    finally:
-        conn.close()
 
 
 def user_features(user_id: str) -> list[str]:
     """Flattened, deduplicated set of every feature this user's groups grant."""
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT DISTINCT gf.feature_key FROM group_features gf "
-            "JOIN user_groups ug ON ug.group_id = gf.group_id WHERE ug.user_id = ? "
-            "ORDER BY gf.feature_key",
-            (user_id,),
-        ).fetchall()
+    stmt = (
+        sa.select(group_features.c.feature_key)
+        .distinct()
+        .select_from(group_features.join(user_groups, user_groups.c.group_id == group_features.c.group_id))
+        .where(user_groups.c.user_id == user_id)
+        .order_by(group_features.c.feature_key)
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
         return [r["feature_key"] for r in rows]
-    finally:
-        conn.close()
 
 
 def user_has_feature(user_id: str, feature_key: str) -> bool:
-    conn = _conn()
-    try:
-        row = conn.execute(
-            "SELECT 1 FROM group_features gf JOIN user_groups ug ON ug.group_id = gf.group_id "
-            "WHERE ug.user_id = ? AND gf.feature_key = ? LIMIT 1",
-            (user_id, feature_key),
-        ).fetchone()
+    stmt = (
+        sa.select(sa.literal(1))
+        .select_from(group_features.join(user_groups, user_groups.c.group_id == group_features.c.group_id))
+        .where(user_groups.c.user_id == user_id, group_features.c.feature_key == feature_key)
+        .limit(1)
+    )
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
         return row is not None
-    finally:
-        conn.close()
 
 
 def delete_for_user(user_id: str) -> None:
     """Called when a user account is deleted, so membership rows don't orphan."""
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM user_groups WHERE user_id = ?", (user_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(user_groups.delete().where(user_groups.c.user_id == user_id))
 
 
 def seed_legacy_editors_group(member_user_ids: list[str]) -> None:

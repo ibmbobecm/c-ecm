@@ -56,7 +56,7 @@ export function Drive() {
   const [commentsItem, setCommentsItem] = useState<DriveItem | null>(null);
   const [shareItem, setShareItem] = useState<DriveItem | null>(null);
   const [esignItem, setEsignItem] = useState<FileItem | null>(null);
-  const [requestApprovalItem, setRequestApprovalItem] = useState<DriveItem | null>(null);
+  const [requestApprovalItems, setRequestApprovalItems] = useState<DriveItem[] | null>(null);
   const [metadataItem, setMetadataItem] = useState<DriveItem | null>(null);
   const [aiAgentItem, setAiAgentItem] = useState<DriveItem | null>(null);
   const [tagsByResource, setTagsByResource] = useState<Record<string, Tag[]>>({});
@@ -132,7 +132,9 @@ export function Drive() {
     apiGet<WorkflowInstance[]>("/workflows/instances", { status: "in_review" })
       .then((instances) => {
         const map: Record<string, WorkflowInstance> = {};
-        for (const inst of instances) map[inst.resource_id] = inst;
+        for (const inst of instances) {
+          for (const r of inst.resources) map[r.resource_id] = inst;
+        }
         setPendingApprovalsByResource(map);
       })
       .catch(() => {});
@@ -390,15 +392,18 @@ export function Drive() {
     }
   };
 
-  const handleRequestApproval = async (item: DriveItem, defId: string) => {
+  const handleRequestApproval = async (items: DriveItem[], defId: string) => {
     try {
       await apiPost("/workflows/instances", {
         definition_id: defId,
-        resource_id: item.id,
-        resource_type: item.type,
+        resources: items.map((item) => ({ resource_id: item.id, resource_type: item.type })),
         comment: null,
       });
-      showSuccess(`Approval requested for "${item.name}".`);
+      showSuccess(
+        items.length === 1
+          ? `Approval requested for "${items[0].name}".`
+          : `Approval requested for ${items.length} items.`
+      );
       // The viewer's Approvals section fetches once on mount, not on a poll —
       // if it's open for this same file, bump its remount key so the request
       // just created actually shows up instead of waiting for a manual
@@ -457,7 +462,7 @@ export function Drive() {
         label: "Request Approval",
         icon: "check-circle",
         separatorBefore: true,
-        onClick: () => setRequestApprovalItem(item),
+        onClick: () => setRequestApprovalItems([item]),
       });
     }
     actions.push({ label: "Delete", icon: "trash", onClick: () => handleTrashMany([item]), danger: true, separatorBefore: true });
@@ -606,6 +611,12 @@ export function Drive() {
                 <Icon name="move" size={15} />
                 Move
               </button>
+              {workflowDefs.length > 0 && (
+                <button onClick={() => setRequestApprovalItems(selectedItems)}>
+                  <Icon name="check-circle" size={15} />
+                  Request Approval
+                </button>
+              )}
               <button className="danger" onClick={() => handleTrashMany(selectedItems)}>
                 <Icon name="trash" size={15} />
                 Delete
@@ -733,7 +744,7 @@ export function Drive() {
             </div>
             <h3>No backend connected yet</h3>
             <p>Connect FileNet, Google Drive, S3, or another backend to start browsing.</p>
-            <button className="btn-primary" onClick={() => setIntegrationsPageOpen(true)}>
+            <button className="btn-primary" onClick={() => setSettingsTab("connections")}>
               Add a connection
             </button>
           </div>
@@ -839,7 +850,7 @@ export function Drive() {
           }}
           onSendForSignature={() => setEsignItem(viewer.file)}
           canRequestApproval={workflowDefs.length > 0}
-          onRequestApproval={() => setRequestApprovalItem(viewer.file)}
+          onRequestApproval={() => setRequestApprovalItems([viewer.file])}
           workflowDefs={workflowDefs}
           approvalsRefreshToken={approvalsRefreshToken}
           onApprovalsChanged={() => setApprovalsRefreshToken((t) => t + 1)}
@@ -875,18 +886,22 @@ export function Drive() {
         />
       )}
 
-      {requestApprovalItem && (
-        <div className="modal-overlay" onMouseDown={() => setRequestApprovalItem(null)}>
+      {requestApprovalItems && (
+        <div className="modal-overlay" onMouseDown={() => setRequestApprovalItems(null)}>
           <div className="modal-card" onMouseDown={(e) => e.stopPropagation()} style={{ maxWidth: 420 }}>
             <div className="modal-header">
               <h2>Request Approval</h2>
-              <button className="modal-close" onClick={() => setRequestApprovalItem(null)} aria-label="Close">
+              <button className="modal-close" onClick={() => setRequestApprovalItems(null)} aria-label="Close">
                 <Icon name="close" size={18} />
               </button>
             </div>
             <div className="modal-body">
               <p className="muted" style={{ marginBottom: 12 }}>
-                Choose a workflow to start for <strong>{requestApprovalItem.name}</strong>:
+                {requestApprovalItems.length === 1 ? (
+                  <>Choose a workflow to start for <strong>{requestApprovalItems[0].name}</strong>:</>
+                ) : (
+                  <>Choose a workflow to start for <strong>{requestApprovalItems.length} items</strong>:</>
+                )}
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {workflowDefs.map((def) => (
@@ -895,8 +910,9 @@ export function Drive() {
                     className="btn-secondary"
                     style={{ textAlign: "left" }}
                     onClick={() => {
-                      setRequestApprovalItem(null);
-                      handleRequestApproval(requestApprovalItem, def.id);
+                      const items = requestApprovalItems;
+                      setRequestApprovalItems(null);
+                      handleRequestApproval(items, def.id);
                     }}
                   >
                     <strong>{def.name}</strong>

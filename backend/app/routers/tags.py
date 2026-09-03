@@ -1,17 +1,22 @@
 from fastapi import APIRouter, Depends, HTTPException
 
 from .. import access_control, activity_service, tags_store
-from ..auth import CurrentSession, get_app_session, get_current_session
+from ..auth import CurrentSession, get_app_session, get_current_session, require_feature
 from ..schemas import BulkTagsRequest, TagAttachRequest, TagCreateRequest, TagOut
 
 router = APIRouter(tags=["tags"])
+
+_manage_tags = require_feature("manage_tags")
 
 # get_bulk_resource_tags (below) has no per-resource check for the same
 # reason as comments.py's bulk counts endpoint — it fans out over a whole
 # folder listing at once; tag *names* on many resources aren't sensitive
 # enough to justify an ancestor walk per item. Single-resource tag routes
 # below ARE checked, at "view" — tagging something you can see doesn't
-# need full edit rights.
+# need full edit rights. Deleting a tag *definition* is different: it's a
+# global, cascading action (every attachment of it on every connection
+# disappears at once), so — unlike attach/detach — that one needs a real
+# feature gate rather than just being logged in.
 
 
 def _actor(session: CurrentSession) -> str:
@@ -41,7 +46,7 @@ def create_tag(req: TagCreateRequest, _session_id: str = Depends(get_app_session
 
 
 @router.delete("/tags/{tag_id}", status_code=204)
-def delete_tag(tag_id: str, _session_id: str = Depends(get_app_session)):
+def delete_tag(tag_id: str, _user=Depends(_manage_tags)):
     tags_store.delete_tag(tag_id)
 
 

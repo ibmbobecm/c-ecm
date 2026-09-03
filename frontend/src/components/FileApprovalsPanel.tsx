@@ -8,9 +8,9 @@
  */
 import { useEffect, useState } from "react";
 import { apiGet, apiPost, ApiError } from "../api/client";
-import type { WorkflowDefinition, WorkflowInstance } from "../types";
+import type { Group, User, WorkflowDefinition, WorkflowInstance } from "../types";
 import { useAuth } from "../contexts/AuthContext";
-import { StatusBadge, StepTimeline } from "./WorkflowsPanel";
+import { AddDocumentControl, assigneeLabel, canManageInstance, isAssigned, ReassignControl, StatusBadge, StepTimeline } from "./WorkflowsPanel";
 import { Icon } from "../icons";
 import { formatDate } from "../utils";
 
@@ -23,13 +23,18 @@ export function FileApprovalsPanel({
   definitions: WorkflowDefinition[];
   onChanged?: () => void;
 }) {
-  const { user } = useAuth();
+  const { user, can } = useAuth();
   // Matches the backend's cancel_instance check exactly: the requester or
   // a superadmin can cancel — not a delegable feature, since it's
   // specifically "override anyone's request," the same bypass concept as
-  // every other superadmin-only override in this app.
+  // every other superadmin-only override in this app. Reassign/add-document
+  // use a separate, broader gate (canManageInstance) matching the backend's
+  // _is_involved.
   const isAdmin = Boolean(user?.is_superadmin);
+  const isWorkflowAdmin = isAdmin || can("manage_workflow_definitions");
   const [instances, setInstances] = useState<WorkflowInstance[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [actioning, setActioning] = useState<string | null>(null);
   const [comment, setComment] = useState<Record<string, string>>({});
@@ -43,6 +48,13 @@ export function FileApprovalsPanel({
       .finally(() => setLoading(false));
   };
   useEffect(load, [resourceId]);
+
+  // Best-effort, same reasoning as WorkflowsPanel: both require an
+  // admin-ish feature, so a plain reviewer just sees raw usernames/ids.
+  useEffect(() => {
+    apiGet<User[]>("/users").then(setUsers).catch(() => {});
+    apiGet<Group[]>("/groups").then(setGroups).catch(() => {});
+  }, []);
 
   const act = async (instanceId: string, action: "approved" | "rejected") => {
     setActioning(instanceId);
@@ -88,14 +100,14 @@ export function FileApprovalsPanel({
       {error && <div className="auth-error" style={{ fontSize: "var(--text-sm)" }}>{error}</div>}
       {instances.map((inst) => {
         const def = definitions.find((d) => d.id === inst.definition_id);
-        const stepDef = def?.steps[inst.current_step];
+        const stepDef = inst.steps[inst.current_step];
         const alreadyActed = inst.step_actions.some(
           (a) => a.reviewer === user?.username && a.step_index === inst.current_step
         );
         const isReviewer =
           inst.status === "in_review" &&
           !!stepDef &&
-          (stepDef.reviewers.length === 0 || stepDef.reviewers.includes(user?.username ?? "")) &&
+          (stepDef.assignees.length === 0 || isAssigned(user, stepDef.assignees)) &&
           !alreadyActed;
         const isRequester = inst.requested_by === user?.username;
 
@@ -105,10 +117,15 @@ export function FileApprovalsPanel({
               <strong style={{ fontSize: "var(--text-sm)" }}>{def?.name ?? inst.definition_id}</strong>
               <StatusBadge status={inst.status} />
             </div>
-            {inst.status === "in_review" && def && stepDef && (
+            {inst.resources.length > 1 && (
               <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
-                Step {inst.current_step + 1} of {def.steps.length}: {stepDef.name}
-                {stepDef.reviewers.length > 0 ? ` (${stepDef.reviewers.join(", ")})` : " (any reviewer)"}
+                Bundled with {inst.resources.length - 1} other document{inst.resources.length - 1 === 1 ? "" : "s"}
+              </div>
+            )}
+            {inst.status === "in_review" && stepDef && (
+              <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>
+                Step {inst.current_step + 1} of {inst.steps.length}: {stepDef.name}
+                {stepDef.assignees.length > 0 ? ` (${stepDef.assignees.map((a) => assigneeLabel(a, users, groups)).join(", ")})` : " (any reviewer)"}
               </div>
             )}
             <div className="muted" style={{ fontSize: 12 }}>
@@ -118,7 +135,13 @@ export function FileApprovalsPanel({
             {inst.comment && (
               <p style={{ fontSize: "var(--text-sm)", fontStyle: "italic", margin: "4px 0" }}>"{inst.comment}"</p>
             )}
-            <StepTimeline instance={inst} definition={def} />
+            <StepTimeline instance={inst} />
+            {canManageInstance(user, isWorkflowAdmin, inst) && (
+              <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 6 }}>
+                <ReassignControl instance={inst} users={users} groups={groups} onDone={() => { load(); onChanged(); }} />
+                <AddDocumentControl instance={inst} onDone={() => { load(); onChanged(); }} />
+              </div>
+            )}
             {isReviewer && (
               <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
                 <input

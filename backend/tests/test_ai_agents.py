@@ -764,7 +764,11 @@ def test_public_lead_capture_allows_missing_email_and_phone(client, conn_headers
 def test_listing_leads_requires_authentication(client, conn_headers, uploaded_file):
     agent = _create_agent(client, conn_headers, "file", uploaded_file["id"], uploaded_file["name"])
     resp = client.get(f"/ai-agents/{agent['id']}/leads")
-    assert resp.status_code == 401
+    # A missing Authorization header (as opposed to an invalid/expired
+    # token) is FastAPI's HTTPBearer default behavior for "no credentials
+    # at all": 403, not 401 — consistent with every other route in this
+    # app (see e.g. test_users.py::test_list_users_requires_auth).
+    assert resp.status_code == 403
 
 
 def test_lead_capture_is_rate_limited_separately_from_chat(client, conn_headers, uploaded_file):

@@ -57,16 +57,33 @@ def _ancestor_chain(session: CurrentSession, resource_id: str, resource_type: st
     return chain
 
 
-def effective_level(session: CurrentSession, resource_id: str, resource_type: str) -> str | None:
+def effective_level(
+    session: CurrentSession, resource_id: str, resource_type: str, *, _connection_has_grants: bool | None = None,
+) -> str | None:
     """Returns "view", "edit", or None (meaning: no restriction applies —
     the resource is fully open, today's default). Superadmins always get
     "edit" without any lookup. Used both by require_resource_level() below
     and by the GET .../effective-access endpoint the frontend uses to show
-    an access indicator."""
+    an access indicator.
+
+    `_connection_has_grants`: pass the result of
+    resource_permissions_store.connection_has_any_grants(session.connection_id)
+    when calling this in a loop over many resources on the same connection
+    (e.g. filtering a search-result or folder-listing) — that check doesn't
+    depend on resource_id, so computing it once per request instead of once
+    per resource avoids the dominant cost for the common case of a
+    connection with no ACLs at all (every call would otherwise open its own
+    SQLite connection just to learn the same "no" it already knows). Leave
+    it None for single-resource callers; behavior is identical either way.
+    """
     user = session.user
     if user.get("is_superadmin"):
         return "edit"
-    if not resource_permissions_store.connection_has_any_grants(session.connection_id):
+    has_grants = (
+        _connection_has_grants if _connection_has_grants is not None
+        else resource_permissions_store.connection_has_any_grants(session.connection_id)
+    )
+    if not has_grants:
         return None
 
     chain = _ancestor_chain(session, resource_id, resource_type)

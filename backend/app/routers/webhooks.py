@@ -9,9 +9,16 @@ from ..schemas import WebhookCreateRequest, WebhookOut, WebhookUpdateRequest
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 
 
+def _out(w: dict) -> WebhookOut:
+    # Never echo the raw HMAC secret back over the API — same *_set-boolean
+    # convention already used for every other stored secret in this app
+    # (admin settings' OAuth client secrets, API keys, etc.).
+    return WebhookOut(**{**w, "secret_set": bool(w.get("secret"))})
+
+
 @router.get("", response_model=list[WebhookOut])
 def list_webhooks(_admin=Depends(require_feature("manage_webhooks"))):
-    return [WebhookOut(**w) for w in webhook_service.list_webhooks()]
+    return [_out(w) for w in webhook_service.list_webhooks()]
 
 
 @router.post("", response_model=WebhookOut, status_code=201)
@@ -25,7 +32,7 @@ def create_webhook(req: WebhookCreateRequest, _admin=Depends(require_feature("ma
         )
     except webhook_service.WebhookUrlError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return WebhookOut(**wh)
+    return _out(wh)
 
 
 @router.patch("/{webhook_id}", response_model=WebhookOut)
@@ -41,7 +48,7 @@ def update_webhook(webhook_id: str, req: WebhookUpdateRequest, _admin=Depends(re
         raise HTTPException(status_code=400, detail=str(exc))
     if updated is None:
         raise HTTPException(status_code=404, detail="Webhook not found")
-    return WebhookOut(**updated)
+    return _out(updated)
 
 
 @router.delete("/{webhook_id}", status_code=204)

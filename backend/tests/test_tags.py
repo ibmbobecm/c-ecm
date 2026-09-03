@@ -16,6 +16,30 @@ def test_create_attach_list_detach_tag(client, conn_headers, uploaded_file, auth
     assert not any(t["id"] == tag_id for t in after.json())
 
 
+def test_deleting_a_tag_requires_manage_tags_feature(client, auth_headers):
+    # Deleting a tag *definition* is a global, cascading action (every
+    # attachment of it on every connection disappears at once) —
+    # previously any authenticated user could do this, including a
+    # brand-new account with no group memberships at all.
+    client.post("/users", headers=auth_headers, json={
+        "username": "tag_outsider", "password": "testpass123", "display_name": "Outsider", "is_superadmin": False,
+    })
+    login = client.post("/auth/login", json={"username": "tag_outsider", "password": "testpass123"})
+    outsider_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+    try:
+        tag = client.post("/tags", headers=auth_headers, json={"name": "GateTest", "color": "#123456"}).json()
+
+        forbidden = client.delete(f"/tags/{tag['id']}", headers=outsider_headers)
+        assert forbidden.status_code == 403
+
+        allowed = client.delete(f"/tags/{tag['id']}", headers=auth_headers)
+        assert allowed.status_code == 204
+    finally:
+        for u in client.get("/users", headers=auth_headers).json():
+            if u["username"] == "tag_outsider":
+                client.delete(f"/users/{u['id']}", headers=auth_headers)
+
+
 def test_get_or_create_tag_is_idempotent_by_name(client, auth_headers):
     a = client.post("/tags", headers=auth_headers, json={"name": "Shared", "color": "#000000"})
     b = client.post("/tags", headers=auth_headers, json={"name": "shared", "color": "#ffffff"})  # different case, different color

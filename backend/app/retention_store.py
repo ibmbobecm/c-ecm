@@ -14,69 +14,65 @@ background thread) evaluates all tracked resources each day.
 """
 
 import datetime
-import json
-import sqlite3
 import uuid
 
-from .config import DATA_DIR
+import sqlalchemy as sa
 
-_DB_PATH = DATA_DIR / "retention.db"
+from . import db
 
+_metadata = sa.MetaData()
 
-def _conn() -> sqlite3.Connection:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(_DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA busy_timeout=5000")  # wait for a concurrent writer instead of failing instantly
-    return conn
+# name has no portable case-insensitive collation (SQLite's COLLATE NOCASE
+# doesn't exist on Postgres/Oracle) — a unique functional index on
+# lower(name) gives the same case-insensitive uniqueness guarantee and
+# compiles on all three dialects (see idx_rp_name below).
+_rp_name = sa.Column("name", sa.String(255), nullable=False)
 
+retention_policies = sa.Table(
+    "retention_policies", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    _rp_name,
+    sa.Column("description", sa.Text),
+    sa.Column("retention_days", sa.Integer, nullable=False),
+    sa.Column("action", sa.String(64), nullable=False, server_default="review"),
+    sa.Column("class_id", sa.String(32)),
+    sa.Column("connection_id", sa.String(32)),
+    sa.Column("active", sa.Boolean, nullable=False, server_default=sa.true()),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Index("idx_rp_name", sa.func.lower(_rp_name), unique=True),
+)
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS retention_policies (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    description TEXT,
-    retention_days INTEGER NOT NULL,
-    action TEXT NOT NULL DEFAULT 'review',
-    class_id TEXT,
-    connection_id TEXT,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rp_name ON retention_policies (name COLLATE NOCASE);
+retention_records = sa.Table(
+    "retention_records", _metadata,
+    sa.Column("id", sa.String(32), primary_key=True),
+    sa.Column("policy_id", sa.String(32), sa.ForeignKey("retention_policies.id", ondelete="CASCADE"), nullable=False),
+    sa.Column("connection_id", sa.String(32), nullable=False),
+    # resource_id is a foreign resource id from one of the storage providers,
+    # not one of this app's own uuid4().hex ids — it can be numeric,
+    # path-like, or an opaque provider token, so it gets a generous bound
+    # rather than the 32-char id column width used above.
+    sa.Column("resource_id", sa.String(255), nullable=False),
+    sa.Column("resource_type", sa.String(64), nullable=False),
+    sa.Column("resource_name", sa.Text),
+    sa.Column("due_date", sa.String(40), nullable=False),
+    sa.Column("status", sa.String(64), nullable=False, server_default="active"),
+    sa.Column("legal_hold", sa.Boolean, nullable=False, server_default=sa.false()),
+    sa.Column("actioned_at", sa.String(40)),
+    sa.Column("created_at", sa.String(40), nullable=False),
+    sa.Index("idx_rr_resource", "connection_id", "resource_id", "policy_id", unique=True),
+    sa.Index("idx_rr_due", "due_date", "status"),
+)
 
-CREATE TABLE IF NOT EXISTS retention_records (
-    id TEXT PRIMARY KEY,
-    policy_id TEXT NOT NULL REFERENCES retention_policies(id) ON DELETE CASCADE,
-    connection_id TEXT NOT NULL,
-    resource_id TEXT NOT NULL,
-    resource_type TEXT NOT NULL,
-    resource_name TEXT,
-    due_date TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'active',
-    legal_hold INTEGER NOT NULL DEFAULT 0,
-    actioned_at TEXT,
-    created_at TEXT NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_rr_resource
-    ON retention_records (connection_id, resource_id, policy_id);
-CREATE INDEX IF NOT EXISTS idx_rr_due ON retention_records (due_date, status);
-"""
+_engine = db.get_engine("retention")
 
 
 def init_db() -> None:
-    conn = _conn()
-    try:
-        conn.executescript(_SCHEMA)
-        conn.commit()
-    finally:
-        conn.close()
+    db.create_all(_metadata, "retention")
 
 
 # ---------- policies -------------------------------------------------------
 
-def _policy_row(row: sqlite3.Row) -> dict:
+def _policy_row(row) -> dict:
     return {
         "id": row["id"],
         "name": row["name"],
@@ -91,68 +87,54 @@ def _policy_row(row: sqlite3.Row) -> dict:
 
 
 def list_policies() -> list[dict]:
-    conn = _conn()
-    try:
-        return [_policy_row(r) for r in conn.execute("SELECT * FROM retention_policies ORDER BY name COLLATE NOCASE").fetchall()]
-    finally:
-        conn.close()
+    stmt = sa.select(retention_policies).order_by(sa.func.lower(retention_policies.c.name))
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_policy_row(r) for r in rows]
 
 
 def get_policy(policy_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM retention_policies WHERE id = ?", (policy_id,)).fetchone()
-        return _policy_row(row) if row else None
-    finally:
-        conn.close()
+    stmt = sa.select(retention_policies).where(retention_policies.c.id == policy_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return _policy_row(row) if row else None
 
 
 def create_policy(name: str, description: str | None, retention_days: int, action: str,
                   class_id: str | None = None, connection_id: str | None = None) -> dict:
     pid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "INSERT INTO retention_policies (id, name, description, retention_days, action, class_id, connection_id, active, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)",
-            (pid, name, description, retention_days, action, class_id, connection_id, now),
+            retention_policies.insert().values(
+                id=pid, name=name, description=description, retention_days=retention_days,
+                action=action, class_id=class_id, connection_id=connection_id, active=True, created_at=now,
+            )
         )
-        conn.commit()
-        return _policy_row(conn.execute("SELECT * FROM retention_policies WHERE id = ?", (pid,)).fetchone())
-    finally:
-        conn.close()
+        row = conn.execute(sa.select(retention_policies).where(retention_policies.c.id == pid)).mappings().first()
+    return _policy_row(row)
 
 
 def update_policy(policy_id: str, **kwargs) -> dict | None:
     allowed = {"name", "description", "retention_days", "action", "class_id", "connection_id", "active"}
-    updates = [(k, v) for k, v in kwargs.items() if k in allowed and v is not None]
+    updates = {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     if not updates:
         return get_policy(policy_id)
-    conn = _conn()
-    try:
-        set_clause = ", ".join(f"{k} = ?" for k, _ in updates)
-        conn.execute(f"UPDATE retention_policies SET {set_clause} WHERE id = ?", (*[v for _, v in updates], policy_id))
-        conn.commit()
-        row = conn.execute("SELECT * FROM retention_policies WHERE id = ?", (policy_id,)).fetchone()
-        return _policy_row(row) if row else None
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(retention_policies.update().where(retention_policies.c.id == policy_id).values(**updates))
+        row = conn.execute(sa.select(retention_policies).where(retention_policies.c.id == policy_id)).mappings().first()
+    return _policy_row(row) if row else None
 
 
 def delete_policy(policy_id: str) -> None:
-    conn = _conn()
-    try:
-        conn.execute("DELETE FROM retention_records WHERE policy_id = ?", (policy_id,))
-        conn.execute("DELETE FROM retention_policies WHERE id = ?", (policy_id,))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(retention_records.delete().where(retention_records.c.policy_id == policy_id))
+        conn.execute(retention_policies.delete().where(retention_policies.c.id == policy_id))
 
 
 # ---------- records --------------------------------------------------------
 
-def _rec_row(row: sqlite3.Row) -> dict:
+def _rec_row(row) -> dict:
     return {
         "id": row["id"],
         "policy_id": row["policy_id"],
@@ -178,94 +160,89 @@ def enroll_resource(policy_id: str, connection_id: str, resource_id: str,
     due = base + datetime.timedelta(days=policy["retention_days"])
     rid = uuid.uuid4().hex
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
+        # Portable stand-in for sqlite's "INSERT OR REPLACE": that construct
+        # has no Postgres/Oracle equivalent, and here it must specifically
+        # replace (not merge into) any existing row sharing this unique key
+        # (connection_id, resource_id, policy_id) — re-enrolling assigns a
+        # fresh id and resets due_date/status/legal_hold, same as the
+        # original delete-and-insert-on-conflict behavior.
         conn.execute(
-            "INSERT OR REPLACE INTO retention_records "
-            "(id, policy_id, connection_id, resource_id, resource_type, resource_name, due_date, status, legal_hold, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, 'active', 0, ?)",
-            (rid, policy_id, connection_id, resource_id, resource_type, resource_name, due.isoformat(), now),
+            retention_records.delete().where(
+                retention_records.c.connection_id == connection_id,
+                retention_records.c.resource_id == resource_id,
+                retention_records.c.policy_id == policy_id,
+            )
         )
-        conn.commit()
-        return _rec_row(conn.execute("SELECT * FROM retention_records WHERE id = ?", (rid,)).fetchone())
-    finally:
-        conn.close()
+        conn.execute(
+            retention_records.insert().values(
+                id=rid, policy_id=policy_id, connection_id=connection_id, resource_id=resource_id,
+                resource_type=resource_type, resource_name=resource_name, due_date=due.isoformat(),
+                status="active", legal_hold=False, created_at=now,
+            )
+        )
+        row = conn.execute(sa.select(retention_records).where(retention_records.c.id == rid)).mappings().first()
+    return _rec_row(row)
 
 
 def set_legal_hold(connection_id: str, resource_id: str, hold: bool) -> None:
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "UPDATE retention_records SET legal_hold = ? WHERE connection_id = ? AND resource_id = ?",
-            (int(hold), connection_id, resource_id),
+            retention_records.update()
+            .where(retention_records.c.connection_id == connection_id, retention_records.c.resource_id == resource_id)
+            .values(legal_hold=bool(hold))
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def list_records(*, connection_id: str | None = None, status: str | None = None,
                  due_before: str | None = None) -> list[dict]:
-    clauses, params = [], []
+    stmt = sa.select(retention_records)
     if connection_id:
-        clauses.append("connection_id = ?")
-        params.append(connection_id)
+        stmt = stmt.where(retention_records.c.connection_id == connection_id)
     if status:
-        clauses.append("status = ?")
-        params.append(status)
+        stmt = stmt.where(retention_records.c.status == status)
     if due_before:
-        clauses.append("due_date <= ?")
-        params.append(due_before)
-    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
-    conn = _conn()
-    try:
-        return [_rec_row(r) for r in conn.execute(
-            f"SELECT * FROM retention_records {where} ORDER BY due_date", params
-        ).fetchall()]
-    finally:
-        conn.close()
+        stmt = stmt.where(retention_records.c.due_date <= due_before)
+    stmt = stmt.order_by(retention_records.c.due_date)
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_rec_row(r) for r in rows]
 
 
 def mark_actioned(record_id: str, status: str) -> None:
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
+    with _engine.begin() as conn:
         conn.execute(
-            "UPDATE retention_records SET status = ?, actioned_at = ? WHERE id = ?",
-            (status, now, record_id),
+            retention_records.update()
+            .where(retention_records.c.id == record_id)
+            .values(status=status, actioned_at=now)
         )
-        conn.commit()
-    finally:
-        conn.close()
 
 
 def get_record(record_id: str) -> dict | None:
-    conn = _conn()
-    try:
-        row = conn.execute("SELECT * FROM retention_records WHERE id = ?", (record_id,)).fetchone()
-        return _rec_row(row) if row else None
-    finally:
-        conn.close()
+    stmt = sa.select(retention_records).where(retention_records.c.id == record_id)
+    with _engine.connect() as conn:
+        row = conn.execute(stmt).mappings().first()
+    return _rec_row(row) if row else None
 
 
 def set_legal_hold_by_record_id(record_id: str, hold: bool) -> None:
-    conn = _conn()
-    try:
-        conn.execute("UPDATE retention_records SET legal_hold = ? WHERE id = ?", (1 if hold else 0, record_id))
-        conn.commit()
-    finally:
-        conn.close()
+    with _engine.begin() as conn:
+        conn.execute(
+            retention_records.update()
+            .where(retention_records.c.id == record_id)
+            .values(legal_hold=bool(hold))
+        )
 
 
 def run_due_check() -> list[dict]:
     """Called by the scheduler.  Returns records that are due and not on legal hold."""
     today = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    conn = _conn()
-    try:
-        rows = conn.execute(
-            "SELECT * FROM retention_records WHERE status = 'active' AND legal_hold = 0 AND due_date <= ?",
-            (today,),
-        ).fetchall()
-        return [_rec_row(r) for r in rows]
-    finally:
-        conn.close()
+    stmt = sa.select(retention_records).where(
+        retention_records.c.status == "active",
+        retention_records.c.legal_hold.is_(False),
+        retention_records.c.due_date <= today,
+    )
+    with _engine.connect() as conn:
+        rows = conn.execute(stmt).mappings().all()
+    return [_rec_row(r) for r in rows]
